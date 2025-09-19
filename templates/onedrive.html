@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>OneDrive 保存（組織専用ピッカー + 新規フォルダ）</title>
+<title>OneDrive 保存（選択したものをUI入力名で保存）</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root{ --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#fff; --primary:#0b5; }
@@ -8,15 +8,15 @@
        color:var(--fg); max-width:900px; margin:20px auto; padding:0 10px;}
   h1{font-size:18px;margin:0 0 8px}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-  .col{display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1}
+  .col{display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1}
   label.small{font-size:12px;color:var(--muted)}
-  input[type=text]{flex:1;min-width:240px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
-  button{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}
+  input[type=text]{flex:1;min-width:240px;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+  button{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;cursor:pointer}
   button:disabled{opacity:.55;cursor:not-allowed}
   .pill{padding:4px 8px;border:1px solid #e8e8ff;background:#f7f7ff;border-radius:999px}
   .badge{padding:2px 8px;border-radius:999px;background:#eef;color:#224;font-weight:600}
   .muted{color:var(--muted)}
-  #log{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:10px;min-height:120px}
+  #log{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:10px;min-height:140px}
 
   .picker-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9999}
   .picker-panel{width:min(560px,92vw);background:var(--bg);border-radius:14px;box-shadow:0 10px 24px rgba(0,0,0,.20);overflow:hidden}
@@ -44,26 +44,20 @@
 
   .vertical{flex-direction:column;align-items:flex-start;gap:8px}
   .chk{display:flex;align-items:center;gap:8px}
-
-  /* 親へボタンはUIから隠す */
-  #btnUp { display: none !important; }
-  /* 強制付与ヒントも非表示 */
-  #nm_eml_hint, #nm_xlsx_hint { display: none !important; }
+  #btnUp { display: none !important; } /* 親へボタン非表示（必要なら外してOK） */
 </style>
 
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
-<p class="muted">Graph API（アプリ権限）で保存。フォルダは自前ピッカー。</p>
+<p class="muted">チェックしたものだけ保存。ファイル名は下の入力値で保存されます（拡張子は自動付与）。</p>
 
-<div class="row vertical">
+<div class="row">
   <div class="col">
     <label class="small">AI作成本文（.eml）のベース名</label>
-    <input id="emlBase" type="text" placeholder="Report">
-    <div class="muted" id="nm_eml_hint"></div>
+    <input id="emlBase" type="text" placeholder="Report_AImade">
   </div>
   <div class="col">
-    <label class="small">添付Excelのベース名（拡張子は添付のオリジナルを強制付与）</label>
-    <input id="xlsxBase" type="text" placeholder="SkillSheet">
-    <div class="muted" id="nm_xlsx_hint"></div>
+    <label class="small">添付Excelのベース名</label>
+    <input id="xlsxBase" type="text" placeholder="Report_skillsheet_yyyymmdd">
   </div>
 </div>
 
@@ -82,13 +76,11 @@
   </div>
 </div>
 
-<div id="orgPanel">
-  <div class="row">
-    <button id="pickLocal">📁 保存先フォルダを選ぶ</button>
-    <span id="pickedHint" class="pill"></span>
-  </div>
-  <div class="row"><button id="upload" disabled>⬆ アップロード実行</button></div>
+<div class="row">
+  <button id="pickLocal">📁 保存先フォルダを選ぶ</button>
+  <span id="pickedHint" class="pill"></span>
 </div>
+<div class="row"><button id="upload" disabled>⬆ 選択したものを保存</button></div>
 
 <h3>ログ</h3>
 <pre id="log"></pre>
@@ -124,33 +116,36 @@
 const $ = (id)=>document.getElementById(id);
 const log = (m)=>{ $("log").textContent += m + "\n"; };
 
+// ===== Query =====
 const q = new URLSearchParams(location.search);
-const T_EML   = q.get("ticket_eml")   || "";
-const T_XLSX  = q.get("ticket_xlsx")  || "";
-const T_MSG   = q.get("ticket_msg")   || "";
-const TICKET_SINGLE = q.get("ticket") || "";
+const T_EML   = (q.get("ticket_eml")  || "").trim();
+const T_XLXS_RAW = (q.get("ticket_xlsx") || "").trim();   // 複数可（カンマ区切り）
+const T_MSG   = (q.get("ticket_msg")  || "").trim();
+const INIT_EML  = (q.get("eml")   || "Report_AImade").trim();
+const INIT_XLSX = (q.get("excel") || "Report_skillsheet").trim();
 
-const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
-const XLSX_BASE_INIT = (q.get("excel") || "SkillSheet").trim();
-$("emlBase").value  = EML_BASE_INIT;
-$("xlsxBase").value = XLSX_BASE_INIT;
+$("emlBase").value  = INIT_EML;
+$("xlsxBase").value = INIT_XLSX;
 
-// Endpoints (monolith)
+// XLSX 複数（カンマ区切り → 配列）
+const T_XLSX_LIST = T_XLXS_RAW
+  ? T_XLXS_RAW.split(",").map(s => s.trim()).filter(Boolean)
+  : [];
+
+// ===== Endpoints (monolith; relative path) =====
 const EP_PEEK             = "/tickets/peek";
 const EP_UPLOAD_ORG       = "/api/upload";
 const EP_LIST_FOLDERS     = "/api/drive/folders";
 const EP_CREATE_FOLDER    = "/api/drive/create-folder";
-const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
 
-(async function initPeek(){
-  try {
-    if (T_EML || TICKET_SINGLE){ $("cb_eml").checked = true; $("nm_eml").textContent = "ticket ready"; }
-    if (T_XLSX){ $("cb_xlsx").checked = true; $("nm_xlsx").textContent = "ticket ready"; }
-    if (T_MSG){ $("cb_msg").checked = true; $("nm_msg").textContent = "ticket ready"; }
-  } catch(e){ log("peek error: "+e.message); }
+// 初期チェック表示
+(function init(){
+  if (T_EML){ $("cb_eml").checked = true; $("nm_eml").textContent = "ticket ready"; }
+  if (T_XLSX_LIST.length){ $("cb_xlsx").checked = true; $("nm_xlsx").textContent = "tickets: " + T_XLSX_LIST.length; }
+  if (T_MSG){ $("cb_msg").checked = true; $("nm_msg").textContent = "ticket ready"; }
 })();
 
-// Picker
+// ===== Picker =====
 let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
 
 function openPicker(){ pickedFolderId=null;pickedFolderName=null;$("pickerOk").disabled=true;$("picker").style.display="flex";historyStack=[];breadcrumb=[{id:"root",name:"ルート"}];loadFolder("root",false,"open");}
@@ -210,46 +205,83 @@ $("btnNewFolder").onclick=async function(){
 
 $("pickLocal").onclick=openPicker;
 
-$("upload").onclick=async function(){
-  if(!pickedFolderId){ alert("保存先未選択"); return; }
+// ===== Helper: チケットの拡張子を peek から取得 =====
+async function getExtFromTicket(ticket){
   try{
-    // ここではチケットは外部から渡ってくる想定（/front?ticket_eml=... など）
-    // 必要に応じて先に /api/msg-to-xlsx-ticket などを叩いて T_XLSX を作ってから /api/upload を複数回叩く設計にしてね。
+    const r = await fetch(EP_PEEK + "?ticket=" + encodeURIComponent(ticket));
+    const j = await r.json();
+    if (!r.ok) return null;
+    const name = (j.fileName || "").trim();
+    const m = name.lastIndexOf(".");
+    if (m >= 0) return name.slice(m+1);
+  }catch(e){}
+  return null;
+}
+
+// ===== Upload（UI入力名で保存） =====
+$("upload").onclick = async function () {
+  if (!pickedFolderId) { alert("保存先未選択"); return; }
+
+  const doEML  = $("cb_eml").checked  && !!T_EML;
+  const doXLSX = $("cb_xlsx").checked && T_XLSX_LIST.length > 0;
+  const doMSG  = $("cb_msg").checked  && !!T_MSG;
+
+  const emlBase  = ($("emlBase").value  || "Report_AImade").trim();
+  const xlsxBase = ($("xlsxBase").value || "Report_skillsheet").trim();
+
+  if (!doEML && !doXLSX && !doMSG){
+    alert("保存対象が選択されていません"); return;
+  }
+
+  const tasks = [];
+  const pushUpload = (ticket, folderId, fileName) => {
+    const fd = new FormData();
+    fd.append("ticket", ticket);
+    fd.append("folderId", folderId);
+    if (fileName) fd.append("fileName", fileName); // ← UI入力名で上書き保存
+    tasks.push(fetch(EP_UPLOAD_ORG, { method: "POST", body: fd }));
+  };
+
+  try {
     log("🚀 アップロード開始");
-    // 例: 既に ticket_eml / ticket_xlsx がある時はそれらを順にアップロード
-    const tasks = [];
-    if (T_EML || TICKET_SINGLE){
-      const fd = new FormData();
-      fd.append("ticket", T_EML || TICKET_SINGLE);
-      fd.append("folderId", pickedFolderId);
-      tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd}));
+
+    // 1) EML → <emlBase>.eml
+    if (doEML) {
+      const saveName = `${emlBase}.eml`;
+      log("EML 保存予定: " + saveName);
+      pushUpload(T_EML, pickedFolderId, saveName);
     }
-    if (T_XLSX){
-      const fd2 = new FormData();
-      fd2.append("ticket", T_XLSX);
-      fd2.append("folderId", pickedFolderId);
-      tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd2}));
-    }
-    if (T_MSG){
-      // 必要なら .msg → xlsx のチケット化してからアップロード
-      const r=await fetch(EP_MSG_TO_XLSX_TID,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({"ticket":T_MSG,"fileName":$("xlsxBase").value||"Attachment.xlsx"})});
-      const j=await r.json();
-      if(r.ok && j.ticket){
-        const fd3 = new FormData();
-        fd3.append("ticket", j.ticket);
-        fd3.append("folderId", pickedFolderId);
-        tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd3}));
-      }else{
-        log("（参考）msg→xlsx 生成失敗: "+(j.error||r.status));
+
+    // 2) XLSX/CSV（複数可） → <xlsxBase>.<ext> / <xlsxBase>_2.<ext> / ...
+    if (doXLSX) {
+      let idx = 1;
+      for (const tx of T_XLSX_LIST) {
+        const ext = (await getExtFromTicket(tx)) || "xlsx";
+        const suffix = (idx === 1 ? "" : `_${idx}`);
+        const saveName = `${xlsxBase}${suffix}.${ext}`;
+        log("XLSX/CSV 保存予定: " + saveName);
+        pushUpload(tx, pickedFolderId, saveName);
+        idx++;
       }
     }
+
+    // 3) MSG 原本 → <emlBase>_mail.msg
+    if (doMSG) {
+      const saveName = `${emlBase}_mail.msg`;
+      log("MSG 保存予定: " + saveName);
+      pushUpload(T_MSG, pickedFolderId, saveName);
+    }
+
+    // 実行
     const rs = await Promise.all(tasks);
-    for (const r of rs){
+    for (const r of rs) {
       const j = await r.json();
-      if(!r.ok) throw new Error(j.error||r.statusText);
-      log("✅ 保存: "+j.name+" "+j.webUrl);
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      log("✅ 保存: " + (j.name || "(no name)") + " " + (j.webUrl || ""));
     }
     log("🎉 完了");
-  }catch(e){ log("❌ upload: "+e.message); }
+  } catch (e) {
+    log("❌ upload: " + e.message);
+  }
 };
 </script>
