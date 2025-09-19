@@ -1,12 +1,22 @@
 import os, re, json, time, base64, mimetypes, tempfile
 from uuid import uuid4
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
 
 # 追加: EML生成用
 from email.message import EmailMessage
 from email.utils import formatdate
 import html as _html
+
+# ===== excel_api.py 由来の追加 import（仕様変更なしで合体） =====
+import html  # excel_api.py で使用
+from io import BytesIO
+from typing import List, Dict
+from openpyxl import load_workbook
+import xlrd  # .xls対応
+from email import policy
+from email.parser import BytesParser
+import extract_msg  # .msg対応（excel_api 由来機能で使用）
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
@@ -266,7 +276,7 @@ def _extract_first_excel_from_eml(eml_bytes: bytes):
     return None
 
 # ===============================
-# ルーティング
+# OneDrive系 ルーティング
 # ===============================
 @app.get("/")
 def index():
@@ -280,8 +290,8 @@ def serve_front():
 @app.get("/picker-redirect.html")
 def picker_redirect():
     # 必要に応じて使う軽量ページ（CSP干渉回避）
-    html = "<!doctype html><meta charset='utf-8'><title>ok</title>OK"
-    resp = app.response_class(html, mimetype="text/html")
+    html_s = "<!doctype html><meta charset='utf-8'><title>ok</title>OK"
+    resp = app.response_class(html_s, mimetype="text/html")
     resp.headers.pop("Content-Security-Policy", None)
     return resp
 
@@ -685,96 +695,71 @@ def api_upload_msg_xlsx():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+
 # ===============================
-# メイン
+# ======== excel_api 追加分: /extract /extract_mail （仕様そのまま） ========
 # ===============================
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
 
+# excel_api 上限（元のまま）
+MAX_ROWS = 200
+MAX_COLS = 50
+MAX_NONEMPTY = 2000  # 非空セル最大数
 
-# ============================================================
-# excel_api.py の機能を app.py に内包するための追記ブロック
-# - 追加エンドポイント: POST /extract_mail
-# - 仕様: multipart/form-data で file を1つ渡すと、
-#         {"ok":true,"format":"msg|eml","body_text":"...","excel_attachments":[{"filename":"...","cells":"A1\t..."}]}
-#         を返す（元の excel_api.py と同じI/F）
-# ============================================================
-
-# ---- 依存 import（既存と重複していてもOK） ----
-try:
-    from openpyxl import load_workbook    # .xlsx/.xlsm
-except ImportError as _e:
-    load_workbook = None
-
-try:
-    import extract_msg                    # .msg
-except ImportError as _e:
-    extract_msg = None
-
-from io import BytesIO
-import re, html as _html_mod, tempfile
-from email import policy as _email_policy
-from email.parser import BytesParser as _EmailBytesParser
-from typing import List, Dict
-
-# ---- ユーティリティ ----
-def _excelapi_to_str(v) -> str:
+def to_str(v) -> str:
     if v is None:
         return ""
     s = str(v)
     return (
         s.replace("_x000D_", " ")
-        .replace("\t", " ")
-        .replace("\r\n", " ")
-        .replace("\n", " ")
-        .replace("\r", " ")
-        .strip()
+         .replace("\t", " ")
+         .replace("\r\n", " ")
+         .replace("\n", " ")
+         .replace("\r", " ")
+         .strip()
     )
 
-def _excelapi_html_to_text(html_s: str) -> str:
+def _html_to_text(html_s: str) -> str:
     if not html_s:
         return ""
     s = re.sub(r'(?is)<(script|style).*?>.*?</\1>', '', html_s)
     s = re.sub(r'(?is)<br\s*/?>', '\n', s)
     s = re.sub(r'(?is)</p\s*>', '\n', s)
     s = re.sub(r'(?is)<.*?>', '', s)
-    s = _html_mod.unescape(s)
-    return _excelapi_to_str(s)
+    s = html.unescape(s)
+    return to_str(s)
 
-def _excelapi_is_excel_filename(name: str) -> bool:
-    n = (name or "").lower()
-    return n.endswith((".xlsx", ".xlsm", ".xls", ".csv"))
+def _num_to_col(n: int) -> str:
+    s = []
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        s.append(chr(65 + rem))
+    return "".join(reversed(s))
 
-def _excelapi_is_excel_mime(mime: str) -> bool:
-    m = (mime or "").lower()
-    return (
-        m.startswith("application/vnd.openxmlformats-officedocument.spreadsheetml")
-        or m == "application/vnd.ms-excel"
-        or m == "text/csv"
-    )
-
-def _excelapi_looks_like_msg(b: bytes) -> bool:
-    # OLE ヘッダ: D0 CF 11 E0 A1 B1 1A E1
-    return len(b) >= 8 and b[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
-
-def _excelapi_looks_like_eml(b: bytes) -> bool:
-    head = b[:512].decode("utf-8", errors="ignore")
-    return (("From:" in head or "Subject:" in head) and "\n\n" in head)
-
-# ---- Excel 抜粋（sparse TSV）: .xlsx/.xlsm を openpyxl で読む。xls/csv は簡易扱い ----
-def _excelapi_sparse_from_xlsx_bytes(xlsx_bytes: bytes, max_rows=200, max_cols=50, max_nonempty=2000) -> str:
-    if load_workbook is None:
-        return "# ERROR: openpyxl is not installed"
+def _excel_sparse_from_xlsx_bytes(xlsx_bytes: bytes,
+                                  sheet_req: str | None = None,
+                                  max_rows=MAX_ROWS, max_cols=MAX_COLS, max_nonempty=MAX_NONEMPTY) -> str:
     wb = load_workbook(BytesIO(xlsx_bytes), data_only=True, read_only=True)
-    ws = wb.active
+    ws = None
+    if sheet_req:
+        try:
+            idx = int(sheet_req)
+            names = wb.sheetnames
+            if 0 <= idx < len(names):
+                ws = wb[names[idx]]
+            elif 1 <= idx <= len(names):
+                ws = wb[names[idx - 1]]
+        except ValueError:
+            if sheet_req in wb.sheetnames:
+                ws = wb[sheet_req]
+    ws = ws or wb.active
+
     lines, count = [], 0
     for row in ws.iter_rows(min_row=1, max_row=max_rows, min_col=1, max_col=max_cols, values_only=False):
         for cell in row:
             v = cell.value
             if v is None:
                 continue
-            txt = _excelapi_to_str(v)
+            txt = to_str(v)
             if not txt:
                 continue
             lines.append(f"{cell.coordinate}\t{txt}")
@@ -786,131 +771,82 @@ def _excelapi_sparse_from_xlsx_bytes(xlsx_bytes: bytes, max_rows=200, max_cols=5
             break
     return "\n".join(lines)
 
-def _excelapi_sparse_from_csv_bytes(csv_bytes: bytes, max_rows=200, max_cols=50, max_nonempty=2000) -> str:
-    # 簡易CSV → 擬似セル座標 A1, B1 ... で出す
-    import csv
-    import io
-    f = io.StringIO(csv_bytes.decode("utf-8", errors="ignore"))
-    rdr = csv.reader(f)
-    def _num_to_col(n: int) -> str:
-        s = []
-        while n > 0:
-            n, rem = divmod(n - 1, 26)
-            s.append(chr(65 + rem))
-        return "".join(reversed(s))
-    lines, cnt = [], 0
-    for r_idx, row in enumerate(rdr, start=1):
-        if r_idx > max_rows: break
-        for c_idx, val in enumerate(row, start=1):
-            if c_idx > max_cols: break
-            txt = _excelapi_to_str(val)
-            if not txt: continue
-            lines.append(f"{_num_to_col(c_idx)}{r_idx}\t{txt}")
-            cnt += 1
-            if cnt >= max_nonempty:
-                lines.append("# ...truncated...")
+def _excel_sparse_from_xls_bytes(xls_bytes: bytes,
+                                 max_rows=MAX_ROWS, max_cols=MAX_COLS, max_nonempty=MAX_NONEMPTY) -> str:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".xls") as tmp:
+        tmp.write(xls_bytes)
+        tmp.flush()
+        book = xlrd.open_workbook(tmp.name)
+        sheet = book.sheet_by_index(0)
+
+        lines, count = [], 0
+        max_r = min(sheet.nrows, max_rows)
+        max_c = min(sheet.ncols, max_cols)
+        for r in range(max_r):
+            for c in range(max_c):
+                v = sheet.cell_value(r, c)
+                txt = to_str(v)
+                if not txt:
+                    continue
+                coord = f"{_num_to_col(c+1)}{r+1}"
+                lines.append(f"{coord}\t{txt}")
+                count += 1
+                if count >= max_nonempty:
+                    lines.append("# ...truncated...")
+                    break
+            if count >= max_nonempty:
                 break
-        if cnt >= max_nonempty:
-            break
     return "\n".join(lines)
 
-def _excelapi_sparse_from_bytes_auto(filename_lower: str, data: bytes) -> str:
-    if filename_lower.endswith((".xlsx", ".xlsm")):
-        return _excelapi_sparse_from_xlsx_bytes(data)
-    if filename_lower.endswith(".csv"):
-        return _excelapi_sparse_from_csv_bytes(data)
-    # .xls の厳密処理は省略（依存を増やさないため）。openpyxlで失敗する前提でメッセージ。
-    if filename_lower.endswith(".xls"):
-        return "# NOTE: .xls is not supported here (consider converting to .xlsx)"
-    # extensionなし → xlsxトライ
+def _excel_sparse_from_bytes(data: bytes,
+                             filename: str | None = None,
+                             sheet_req: str | None = None,
+                             max_rows=MAX_ROWS, max_cols=MAX_COLS, max_nonempty=MAX_NONEMPTY) -> str:
+    name = (filename or "").lower()
+    if name.endswith(".xls"):
+        return _excel_sparse_from_xls_bytes(data, max_rows, max_cols, max_nonempty)
+    return _excel_sparse_from_xlsx_bytes(data, sheet_req, max_rows, max_cols, max_nonempty)
+
+def _is_excel_filename(name: str) -> bool:
+    n = (name or "").lower()
+    return n.endswith((".xlsx", ".xlsm", ".xls"))
+
+def _is_excel_mime(mime: str) -> bool:
+    m = (mime or "").lower()
+    return (
+        m.startswith("application/vnd.openxmlformats-officedocument.spreadsheetml")
+        or m == "application/vnd.ms-excel"
+    )
+
+@app.route("/extract", methods=["POST"])
+def extract():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "file is required (multipart/form-data)"}), 400
+
+    bom_on = (request.form.get("bom", "true").lower() != "false")
+    inline_on = (request.form.get("inline", "true").lower() != "false")
+    sheet_req = request.form.get("sheet")
+
+    data = f.read()
+    if not data:
+        return jsonify({"error": "empty file"}), 400
+
     try:
-        return _excelapi_sparse_from_xlsx_bytes(data)
+        payload = _excel_sparse_from_bytes(data, filename=f.filename, sheet_req=sheet_req)
     except Exception as e:
-        return f"# ERROR: excel parse failed: {e}"
+        return jsonify({"error": f"failed to read workbook: {e}"}), 400
 
-# ---- .msg / .eml の解析 ----
-def _excelapi_handle_msg_bytes(b: bytes) -> Dict:
-    if extract_msg is None:
-        return {"ok": False, "error": "extract-msg not installed"}
-    with tempfile.NamedTemporaryFile(delete=True, suffix=".msg") as tmp:
-        tmp.write(b); tmp.flush()
-        msg = extract_msg.Message(tmp.name)
+    if bom_on:
+        payload = "\ufeff" + payload
 
-    raw_text = _excelapi_to_str(getattr(msg, "body", "") or "")
-    raw_html = getattr(msg, "bodyHTML", "") or ""
-    body_text = raw_text or _excelapi_html_to_text(raw_html)
+    headers = {}
+    if not inline_on:
+        headers["Content-Disposition"] = 'attachment; filename="extract.tsv"'
+    return Response(payload, mimetype="text/plain; charset=utf-8", headers=headers)
 
-    excel_results: List[Dict] = []
-    for att in msg.attachments:
-        name = getattr(att, "longFilename", "") or getattr(att, "shortFilename", "") or "attachment"
-        data = getattr(att, "data", None)
-        if not data:
-            continue
-        if _excelapi_is_excel_filename(name):
-            try:
-                cells_text = _excelapi_sparse_from_bytes_auto(name.lower(), data)
-            except Exception as e:
-                cells_text = f"# ERROR: excel parse failed: {e}"
-            excel_results.append({"filename": name, "cells": cells_text})
-
-    return {"ok": True, "format": "msg", "body_text": body_text, "excel_attachments": excel_results}
-
-def _excelapi_handle_eml_bytes(b: bytes) -> Dict:
-    msg = _EmailBytesParser(policy=_email_policy.default).parsebytes(b)
-
-    # 本文: text/plain を優先、なければ text/html をテキスト化
-    body_text = ""
-    if msg.is_multipart():
-        # text/plain を探す
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain" and part.get_content_disposition() in (None, "inline"):
-                body_text = _excelapi_to_str(part.get_content())
-                if body_text: break
-        if not body_text:
-            for part in msg.walk():
-                if part.get_content_type() == "text/html" and part.get_content_disposition() in (None, "inline"):
-                    body_text = _excelapi_html_to_text(part.get_content())
-                    if body_text: break
-    else:
-        ctype = msg.get_content_type()
-        if ctype == "text/plain":
-            body_text = _excelapi_to_str(msg.get_content())
-        elif ctype == "text/html":
-            body_text = _excelapi_html_to_text(msg.get_content())
-
-    # 添付: Excel系を抽出
-    excel_results: List[Dict] = []
-    for part in msg.walk():
-        fname = part.get_filename()
-        cdisp = part.get_content_disposition()
-        ctype = part.get_content_type()
-        if cdisp == "attachment" or fname:
-            if _excelapi_is_excel_filename(fname or "") or _excelapi_is_excel_mime(ctype):
-                data = part.get_payload(decode=True) or b""
-                if not data:
-                    continue
-                try:
-                    cells_text = _excelapi_sparse_from_bytes_auto((fname or "").lower(), data)
-                except Exception as e:
-                    cells_text = f"# ERROR: excel parse failed: {e}"
-                excel_results.append({"filename": fname or "attachment.xlsx", "cells": cells_text})
-
-    return {"ok": True, "format": "eml", "body_text": body_text, "excel_attachments": excel_results}
-
-# ---- 既存の Flask アプリに /extract_mail を追加 ----
-@app.post("/extract_mail")
-def _excelapi_extract_mail():
-    """
-    Multipart:
-      - file: required (.msg or .eml)
-    Returns:
-      {
-        "ok": true,
-        "format": "msg"|"eml",
-        "body_text": "...",
-        "excel_attachments": [ { "filename": "...", "cells": "A1\\t..." } ]
-      }
-    """
+@app.route("/extract_mail", methods=["POST"])
+def extract_mail():
     up = request.files.get("file")
     if not up:
         return jsonify({"error": "file is required (multipart/form-data)"}), 400
@@ -919,18 +855,98 @@ def _excelapi_extract_mail():
     data = up.read()
 
     try:
-        if filename.endswith(".msg") or _excelapi_looks_like_msg(data):
-            payload = _excelapi_handle_msg_bytes(data)
-        elif filename.endswith(".eml") or _excelapi_looks_like_eml(data):
-            payload = _excelapi_handle_eml_bytes(data)
+        if filename.endswith(".msg") or _looks_like_msg(data):
+            payload = _handle_msg_bytes(data)
+        elif filename.endswith(".eml") or _looks_like_eml(data):
+            payload = _handle_eml_bytes(data)
         else:
-            # 拡張子が怪しいときは両方試す（eml→msgの順に）
             try:
-                payload = _excelapi_handle_eml_bytes(data)
+                payload = _handle_eml_bytes(data)
             except Exception:
-                payload = _excelapi_handle_msg_bytes(data)
-
-        # ensure_ascii=False で日本語を素のUTF-8で返す
-        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+                try:
+                    payload = _handle_msg_bytes(data)
+                except Exception as e:
+                    return jsonify({"error": f"unsupported or unreadable mail file: {e}"}), 400
+        return Response(json.dumps(payload, ensure_ascii=False),
+                        mimetype="application/json; charset=utf-8")
     except Exception as e:
         return jsonify({"error": f"failed to process mail: {e}"}), 400
+
+def _looks_like_msg(b: bytes) -> bool:
+    return len(b) >= 8 and b[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+
+def _looks_like_eml(b: bytes) -> bool:
+    head = b[:512].decode("utf-8", errors="ignore")
+    return ("From:" in head or "Subject:" in head) and "\n\n" in head
+
+def _handle_msg_bytes(b: bytes) -> Dict:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".msg") as tmp:
+        tmp.write(b)
+        tmp.flush()
+        msg = extract_msg.Message(tmp.name)
+
+    raw_text = to_str(getattr(msg, "body", "") or "")
+    raw_html = getattr(msg, "bodyHTML", "") or ""
+    body_text = raw_text or _html_to_text(raw_html)
+
+    excel_results: List[Dict] = []
+    for att in msg.attachments:
+        name = getattr(att, "longFilename", "") or getattr(att, "shortFilename", "") or "attachment"
+        data = getattr(att, "data", None)
+        if not data:
+            continue
+        if _is_excel_filename(name):
+            try:
+                cells_text = _excel_sparse_from_bytes(data, filename=name)
+            except Exception as e:
+                cells_text = f"# ERROR: excel parse failed: {e}"
+            excel_results.append({"filename": name, "cells": cells_text})
+    return {"ok": True, "format": "msg", "body_text": body_text, "excel_attachments": excel_results}
+
+def _handle_eml_bytes(b: bytes) -> Dict:
+    msg = BytesParser(policy=policy.default).parsebytes(b)
+
+    body_text = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and part.get_content_disposition() in (None, "inline"):
+                body_text = to_str(part.get_content())
+                if body_text:
+                    break
+        if not body_text:
+            for part in msg.walk():
+                if part.get_content_type() == "text/html" and part.get_content_disposition() in (None, "inline"):
+                    body_text = _html_to_text(part.get_content())
+                    if body_text:
+                        break
+    else:
+        ctype = msg.get_content_type()
+        if ctype == "text/plain":
+            body_text = to_str(msg.get_content())
+        elif ctype == "text/html":
+            body_text = _html_to_text(msg.get_content())
+
+    excel_results: List[Dict] = []
+    for part in msg.walk():
+        fname = part.get_filename()
+        cdisp = part.get_content_disposition()
+        ctype = part.get_content_type()
+        if cdisp == "attachment" or fname:
+            if _is_excel_filename(fname) or _is_excel_mime(ctype):
+                data = part.get_payload(decode=True) or b""
+                if not data:
+                    continue
+                try:
+                    cells_text = _excel_sparse_from_bytes(data, filename=fname or "")
+                except Exception as e:
+                    cells_text = f"# ERROR: excel parse failed: {e}"
+                excel_results.append({"filename": fname or "attachment.xlsx", "cells": cells_text})
+
+    return {"ok": True, "format": "eml", "body_text": body_text, "excel_attachments": excel_results}
+
+# ===============================
+# メイン
+# ===============================
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
