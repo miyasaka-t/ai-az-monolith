@@ -1,0 +1,255 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>OneDrive 保存（組織専用ピッカー + 新規フォルダ）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{ --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#fff; --primary:#0b5; }
+  body{font:13px/1.5 ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial;
+       color:var(--fg); max-width:900px; margin:20px auto; padding:0 10px;}
+  h1{font-size:18px;margin:0 0 8px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+  .col{display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1}
+  label.small{font-size:12px;color:var(--muted)}
+  input[type=text]{flex:1;min-width:240px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+  button{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .pill{padding:4px 8px;border:1px solid #e8e8ff;background:#f7f7ff;border-radius:999px}
+  .badge{padding:2px 8px;border-radius:999px;background:#eef;color:#224;font-weight:600}
+  .muted{color:var(--muted)}
+  #log{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:10px;min-height:120px}
+
+  .picker-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9999}
+  .picker-panel{width:min(560px,92vw);background:var(--bg);border-radius:14px;box-shadow:0 10px 24px rgba(0,0,0,.20);overflow:hidden}
+  .picker-head{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  .picker-title{font-weight:700;margin-right:auto}
+  .picker-toolbar{display:flex;gap:6px}
+  .picker-body{padding:0;max-height:60vh;overflow:auto}
+  .picker-breadcrumb{display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid var(--line);background:#fafafa}
+  .crumb{color:#2563eb;cursor:pointer}
+  .crumb::after{content:"›";margin:0 4px;color:#9ca3af}
+  .crumb:last-child{font-weight:700;color:var(--fg)}
+  .crumb:last-child::after{content:""}
+  .list{width:100%;padding:8px}
+  .th,.tr{display:grid;grid-template-columns: 1fr 168px;gap:8px;align-items:center}
+  .th{padding:0 6px 6px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}
+  .tr{padding:2px 6px}
+  .rowbox{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;min-height:34px}
+  .tr:hover .rowbox{background:#f8faff}
+  .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .act{display:inline-flex;gap:6px;justify-content:flex-end;align-items:center}
+  .act > button{padding:6px 8px;line-height:1;border-radius:8px}
+  .ok{background:var(--primary);color:#fff;border-color:var(--primary)}
+  .picker-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:1px solid var(--line)}
+  .path{font-family:ui-monospace,Menlo,Consolas,monospace;color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%}
+
+  .vertical{flex-direction:column;align-items:flex-start;gap:8px}
+  .chk{display:flex;align-items:center;gap:8px}
+
+  /* 親へボタンはUIから隠す */
+  #btnUp { display: none !important; }
+  /* 強制付与ヒントも非表示 */
+  #nm_eml_hint, #nm_xlsx_hint { display: none !important; }
+</style>
+
+<h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
+<p class="muted">Graph API（アプリ権限）で保存。フォルダは自前ピッカー。</p>
+
+<div class="row vertical">
+  <div class="col">
+    <label class="small">AI作成本文（.eml）のベース名</label>
+    <input id="emlBase" type="text" placeholder="Report">
+    <div class="muted" id="nm_eml_hint"></div>
+  </div>
+  <div class="col">
+    <label class="small">添付Excelのベース名（拡張子は添付のオリジナルを強制付与）</label>
+    <input id="xlsxBase" type="text" placeholder="SkillSheet">
+    <div class="muted" id="nm_xlsx_hint"></div>
+  </div>
+</div>
+
+<div class="row vertical">
+  <div class="chk">
+    <label><input type="checkbox" id="cb_eml"> AI作成本文.eml</label>
+    <span id="nm_eml" class="muted"></span>
+  </div>
+  <div class="chk">
+    <label><input type="checkbox" id="cb_xlsx"> 添付Excelスキルシート</label>
+    <span id="nm_xlsx" class="muted"></span>
+  </div>
+  <div class="chk">
+    <label><input type="checkbox" id="cb_msg"> BPさんからのメール.msg</label>
+    <span id="nm_msg" class="muted"></span>
+  </div>
+</div>
+
+<div id="orgPanel">
+  <div class="row">
+    <button id="pickLocal">📁 保存先フォルダを選ぶ</button>
+    <span id="pickedHint" class="pill"></span>
+  </div>
+  <div class="row"><button id="upload" disabled>⬆ アップロード実行</button></div>
+</div>
+
+<h3>ログ</h3>
+<pre id="log"></pre>
+
+<!-- 自前フォルダピッカー -->
+<div id="picker" class="picker-backdrop" style="display:none" role="dialog" aria-modal="true">
+  <div class="picker-panel">
+    <div class="picker-head">
+      <div class="picker-title">保存先を選択</div>
+      <div class="picker-toolbar">
+        <button id="btnBack">← 戻る</button>
+        <button id="btnUp">↑ 親へ</button>
+        <button id="btnNewFolder">＋ 新規フォルダ</button>
+        <button id="btnReload">⟳ 更新</button>
+      </div>
+    </div>
+    <div class="picker-breadcrumb" id="crumbs"></div>
+    <div class="picker-body">
+      <div class="th"><div>名前</div><div style="text-align:right">操作</div></div>
+      <div id="list" class="list"></div>
+    </div>
+    <div class="picker-foot">
+      <div class="path" id="currentPath">/</div>
+      <div>
+        <button id="pickerCancel">キャンセル</button>
+        <button id="pickerOk" class="ok" disabled>このフォルダを選択</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+const log = (m)=>{ $("log").textContent += m + "\n"; };
+
+const q = new URLSearchParams(location.search);
+const T_EML   = q.get("ticket_eml")   || "";
+const T_XLSX  = q.get("ticket_xlsx")  || "";
+const T_MSG   = q.get("ticket_msg")   || "";
+const TICKET_SINGLE = q.get("ticket") || "";
+
+const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
+const XLSX_BASE_INIT = (q.get("excel") || "SkillSheet").trim();
+$("emlBase").value  = EML_BASE_INIT;
+$("xlsxBase").value = XLSX_BASE_INIT;
+
+// Endpoints (monolith)
+const EP_PEEK             = "/tickets/peek";
+const EP_UPLOAD_ORG       = "/api/upload";
+const EP_LIST_FOLDERS     = "/api/drive/folders";
+const EP_CREATE_FOLDER    = "/api/drive/create-folder";
+const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
+
+(async function initPeek(){
+  try {
+    if (T_EML || TICKET_SINGLE){ $("cb_eml").checked = true; $("nm_eml").textContent = "ticket ready"; }
+    if (T_XLSX){ $("cb_xlsx").checked = true; $("nm_xlsx").textContent = "ticket ready"; }
+    if (T_MSG){ $("cb_msg").checked = true; $("nm_msg").textContent = "ticket ready"; }
+  } catch(e){ log("peek error: "+e.message); }
+})();
+
+// Picker
+let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
+
+function openPicker(){ pickedFolderId=null;pickedFolderName=null;$("pickerOk").disabled=true;$("picker").style.display="flex";historyStack=[];breadcrumb=[{id:"root",name:"ルート"}];loadFolder("root",false,"open");}
+function closePicker(){ $("picker").style.display="none"; }
+
+async function loadFolder(id,pushHistory=true,from="enter"){
+  $("list").innerHTML="";$("pickerOk").disabled=true;
+  try{
+    const r=await fetch(EP_LIST_FOLDERS+"?parentId="+encodeURIComponent(id||"root"));
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
+    currentId=id||"root";updateBreadcrumb(j.parent,id);renderList(j.folders||[]);
+    $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")||"/";
+  }catch(e){ log("❌ folder load: "+e.message); }
+}
+function updateBreadcrumb(parentMeta,id){
+  if((id||"root")==="root") breadcrumb=[{id:"root",name:"ルート"}];
+  else{breadcrumb.push({id,name:(parentMeta&&parentMeta.name)||"(不明)"});}
+  $("crumbs").innerHTML="";
+  breadcrumb.forEach((c,i)=>{
+    const s=document.createElement("span");
+    s.className="crumb"; s.textContent=c.name;
+    s.onclick=()=>{breadcrumb=breadcrumb.slice(0,i+1);loadFolder(c.id,false,"crumb");};
+    $("crumbs").appendChild(s);
+  });
+}
+function renderList(folders){
+  const list=$("list");
+  if(!folders.length){list.innerHTML="<div style='padding:10px'>（空）</div>";return;}
+  folders.forEach(f=>{
+    const row=document.createElement("div");row.className="tr";
+    const left=document.createElement("div");left.className="rowbox";left.textContent="📁 "+f.name;left.ondblclick=()=>enterFolder(f.id,f.name);
+    const right=document.createElement("div");right.className="act";
+    const bOpen=document.createElement("button");bOpen.textContent="開く";bOpen.onclick=()=>enterFolder(f.id,f.name);
+    const bChoose=document.createElement("button");bChoose.textContent="ここに保存";bChoose.onclick=()=>chooseHere(f.id,f.name);
+    right.appendChild(bOpen);right.appendChild(bChoose);
+    row.appendChild(left);row.appendChild(right);list.appendChild(row);
+  });
+}
+function enterFolder(id,name){breadcrumb.push({id,name});loadFolder(id,true,"enter");}
+function chooseHere(id,name){pickedFolderId=id;pickedFolderName=name;$("pickedHint").textContent="保存先: "+name;$("pickerOk").disabled=false;}
+$("pickerOk").onclick=function(){ if(pickedFolderId){ closePicker(); $("upload").disabled=false; } }
+$("pickerCancel").onclick=function(){ closePicker(); }
+$("btnBack").onclick=function(){ if(historyStack.length){ const prev=historyStack.pop(); breadcrumb.pop(); loadFolder(prev,false,"back"); } }
+$("btnReload").onclick=function(){ loadFolder(currentId,false,"reload"); }
+$("btnNewFolder").onclick=async function(){
+  const nm=prompt("新しいフォルダ名"); if(!nm) return;
+  try{
+    const r=await fetch(EP_CREATE_FOLDER,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parentId:currentId,name:nm})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    log("📁 フォルダ作成: "+j.name);
+    loadFolder(currentId,false,"reload");
+  }catch(e){ log("❌ create-folder: "+e.message); }
+};
+
+$("pickLocal").onclick=openPicker;
+
+$("upload").onclick=async function(){
+  if(!pickedFolderId){ alert("保存先未選択"); return; }
+  try{
+    // ここではチケットは外部から渡ってくる想定（/front?ticket_eml=... など）
+    // 必要に応じて先に /api/msg-to-xlsx-ticket などを叩いて T_XLSX を作ってから /api/upload を複数回叩く設計にしてね。
+    log("🚀 アップロード開始");
+    // 例: 既に ticket_eml / ticket_xlsx がある時はそれらを順にアップロード
+    const tasks = [];
+    if (T_EML || TICKET_SINGLE){
+      const fd = new FormData();
+      fd.append("ticket", T_EML || TICKET_SINGLE);
+      fd.append("folderId", pickedFolderId);
+      tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd}));
+    }
+    if (T_XLSX){
+      const fd2 = new FormData();
+      fd2.append("ticket", T_XLSX);
+      fd2.append("folderId", pickedFolderId);
+      tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd2}));
+    }
+    if (T_MSG){
+      // 必要なら .msg → xlsx のチケット化してからアップロード
+      const r=await fetch(EP_MSG_TO_XLSX_TID,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({"ticket":T_MSG,"fileName":$("xlsxBase").value||"Attachment.xlsx"})});
+      const j=await r.json();
+      if(r.ok && j.ticket){
+        const fd3 = new FormData();
+        fd3.append("ticket", j.ticket);
+        fd3.append("folderId", pickedFolderId);
+        tasks.push(fetch(EP_UPLOAD_ORG, {method:"POST", body:fd3}));
+      }else{
+        log("（参考）msg→xlsx 生成失敗: "+(j.error||r.status));
+      }
+    }
+    const rs = await Promise.all(tasks);
+    for (const r of rs){
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||r.statusText);
+      log("✅ 保存: "+j.name+" "+j.webUrl);
+    }
+    log("🎉 完了");
+  }catch(e){ log("❌ upload: "+e.message); }
+};
+</script>
