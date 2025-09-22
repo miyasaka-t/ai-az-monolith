@@ -159,6 +159,18 @@ def graph_create_folder(parent_id: str, name: str, conflict_behavior="rename"):
     r.raise_for_status()
     return r.json()
 
+def graph_delete_item(item_id: str):
+    """
+    OneDrive 上の任意アイテム（フォルダ/ファイル）を削除。
+    成功時は True を返す。失敗時は requests.HTTPError を送出。
+    """
+    if not item_id:
+        raise ValueError("missing item_id")
+    url = f"{GRAPH_BASE}/users/{TARGET_USER_ID}/drive/items/{item_id}"
+    r = requests.delete(url, headers=_auth_headers(), timeout=30)
+    r.raise_for_status()
+    return True
+
 # ===============================
 # EML生成（空EML対策の修正ポイント）
 # ===============================
@@ -348,6 +360,30 @@ def api_create_folder():
         return jsonify({"error": "graph_http_error", "status": e.response.status_code, "detail": e.response.text}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+    
+# --- フォルダ削除（新規）
+@app.post("/api/drive/delete-folder")
+@app.delete("/api/drive/delete-folder")
+def api_delete_folder():
+    """
+    JSON/Form/Query 互換:
+      id: 削除するフォルダ（またはアイテム）の itemId
+    """
+    try:
+        j = request.get_json(silent=True) or {}
+        item_id = (
+            request.args.get("id")
+            or request.form.get("id")
+            or j.get("id")
+        )
+        if not item_id:
+            return jsonify({"error": "missing id"}), 400
+        graph_delete_item(item_id)
+        return jsonify({"ok": True})
+    except requests.HTTPError as e:
+        return jsonify({"error": "graph_http_error", "status": e.response.status_code, "detail": e.response.text}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400    
 
 # --- Tickets: create
 @app.post("/tickets/create")
