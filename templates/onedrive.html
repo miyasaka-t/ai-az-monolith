@@ -2,6 +2,7 @@
 <meta charset="utf-8" />
 <title>OneDrive 保存（組織専用ピッカー + 新規フォルダ）</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:,">
 <style>
   :root{ --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#fff; --primary:#0b5; --sel:#e6f3ff; --selborder:#9cc7ff; }
   body{font:13px/1.5 ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial;
@@ -40,14 +41,14 @@
   .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .act{display:inline-flex;gap:6px;justify-content:flex-end;align-items:center}
   .act > button{padding:6px 8px;line-height:1;border-radius:8px}
-  .ok{background:var(--primary);color:#fff;border-color:var(--primary)}
+  .ok{background:var(--primary);color:#fff;border-color: var(--primary)}
   .picker-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:1px solid var(--line)}
   .path{font-family:ui-monospace,Menlo,Consolas,monospace;color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%}
 
-  /* ✅ 縦並び用 */
+  /* 縦並び */
   .vertical{flex-direction:column;align-items:flex-start;gap:8px}
 
-  /* ✅ 親へボタン非表示（既存維持） */
+  /* 親へボタン非表示（既存維持） */
   #btnUp { display: none !important; }
 
   /* 強制付与ヒントをUIから隠す（既存維持） */
@@ -57,7 +58,7 @@
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
 <p class="muted">Graph API（アプリ権限）で保存。フォルダは自前ピッカー。</p>
 
-<!-- ✅ ベース名だけ入力。拡張子は自動付与（縦並び） -->
+<!-- ベース名入力 -->
 <div class="row vertical">
   <div class="col">
     <label class="small">AI作成本文（.eml）のベース名</label>
@@ -71,7 +72,7 @@
   </div>
 </div>
 
-<!-- ✅ チェックボックス廃止：3つすべて（来ているチケットは全部）保存 -->
+<!-- 操作 -->
 <div class="row">
   <button id="openPicker">📁 保存先を選ぶ</button>
   <span id="pickedHint" class="pill"></span>
@@ -101,7 +102,6 @@
       <div class="path" id="currentPath">/</div>
       <div>
         <button id="pickerCancel">キャンセル</button>
-        <!-- ✅ 「このフォルダを選択」を「保存」に変更 -->
         <button id="pickerSave" class="ok" disabled>保存</button>
       </div>
     </div>
@@ -119,7 +119,7 @@ const T_XLSX  = q.get("ticket_xlsx")  || "";
 const T_MSG   = q.get("ticket_msg")   || "";
 const TICKET_SINGLE = q.get("ticket") || "";
 
-// ✅ ベース名の初期表示（拡張子なし想定）
+// ベース名初期値
 const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
 const XLSX_BASE_INIT = (q.get("excel") || "SkillSheet").trim();
 $("emlBase").value  = EML_BASE_INIT;
@@ -136,9 +136,9 @@ const EP_DELETE_FOLDER    = "/api/drive/delete-folder";
 
 // === 追加ここから（upload-from-url）===
 const EP_UPLOAD_FROM_URL  = "/api/upload-from-url";
-// 任意：固定で毎回保存したい GitHub Raw のURLと保存名
-const GITHUB_RAW_URL      = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/%E5%8D%B0%E5%88%B7_%E3%83%97%E3%83%AD%E3%83%91%E3%83%86%E3%82%A3%E3%83%BC_%E3%83%9E%E3%82%AF%E3%83%AD.xlsm";
-const GITHUB_SAVE_NAME    = "印刷_プロパティーマクロ.xlsm";
+// 固定のGitHub Rawファイル（必要に応じて変更/フォーム化OK）
+const GITHUB_RAW_URL   = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/%E5%8D%B0%E5%88%B7_%E3%83%97%E3%83%AD%E3%83%91%E3%83%86%E3%82%A3%E3%83%BC_%E3%83%9E%E3%82%AF%E3%83%AD.xlsm";
+const GITHUB_SAVE_NAME = "印刷_プロパティーマクロ.xlsm";
 // === 追加ここまで（upload-from-url）===
 
 // 初期ヒント
@@ -151,39 +151,45 @@ const GITHUB_SAVE_NAME    = "印刷_プロパティーマクロ.xlsm";
 let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
 let selectedRowEl = null;
 
-function openPicker(){ pickedFolderId=null;pickedFolderName=null;$("pickerSave").disabled=true;$("picker").style.display="flex";historyStack=[];breadcrumb=[{id:"root",name:"ルート"}];loadFolder("root",false,"open");}
+function openPicker(){
+  pickedFolderId=null; pickedFolderName=null;
+  $("pickerSave").disabled=true;
+  $("picker").style.display="flex";
+  historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
+  loadFolder("root",false,"open");
+}
 function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id,pushHistory=true,from="enter"){
-  $("list").innerHTML="";$("pickerSave").disabled=true;
+  $("list").innerHTML=""; $("pickerSave").disabled=true;
   selectedRowEl = null;
   try{
     const r=await fetch(EP_LIST_FOLDERS+"?parentId="+encodeURIComponent(id||"root"));
     const j=await r.json();
     if(!r.ok) throw new Error(j.error||r.statusText);
     if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
-    currentId=id||"root";updateBreadcrumb(j.parent,id);renderList(j.folders||[]);
+    currentId=id||"root"; updateBreadcrumb(j.parent,id); renderList(j.folders||[]);
     $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")||"/";
   }catch(e){ log("❌ folder load: "+e.message); }
 }
 function updateBreadcrumb(parentMeta,id){
   if((id||"root")==="root") breadcrumb=[{id:"root",name:"ルート"}];
-  else{breadcrumb.push({id,name:(parentMeta&&parentMeta.name)||"(不明)"});}
+  else { breadcrumb.push({id,name:(parentMeta&&parentMeta.name)||"(不明)"}); }
   $("crumbs").innerHTML="";
   breadcrumb.forEach((c,i)=>{
     const s=document.createElement("span");
     s.className="crumb"; s.textContent=c.name;
-    s.onclick=()=>{breadcrumb=breadcrumb.slice(0,i+1);loadFolder(c.id,false,"crumb");};
+    s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
     $("crumbs").appendChild(s);
   });
 }
 function renderList(folders){
   const list=$("list");
-  if(!folders.length){list.innerHTML="<div style='padding:10px'>（空）</div>";return;}
+  if(!folders.length){ list.innerHTML="<div style='padding:10px'>（空）</div>"; return; }
   folders.forEach(f=>{
-    const row=document.createElement("div");row.className="tr";
-    const left=document.createElement("div");left.className="rowbox name";left.textContent="📁 "+f.name;
-    // クリックで選択（色変化）
+    const row=document.createElement("div"); row.className="tr";
+    const left=document.createElement("div"); left.className="rowbox name"; left.textContent="📁 "+f.name;
+    // クリックで選択
     left.onclick=()=>{
       if(selectedRowEl) selectedRowEl.classList.remove("selected");
       left.classList.add("selected");
@@ -193,19 +199,19 @@ function renderList(folders){
       $("pickerSave").disabled=false;
       $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")+"/"+f.name;
     };
-    // ダブルクリックで開く
-    left.ondblclick()=>enterFolder(f.id,f.name);
+    // ✅ ダブルクリックで開く（修正済み）
+    left.ondblclick = () => enterFolder(f.id,f.name);
 
-    const right=document.createElement("div");right.className="act";
-    const bOpen=document.createElement("button");bOpen.textContent="開く";bOpen.onclick=()=>enterFolder(f.id,f.name);
-    const bDel=document.createElement("button");bDel.textContent="削除";bDel.onclick=()=>deleteFolder(f.id,f.name);
-    right.appendChild(bOpen);right.appendChild(bDel);
+    const right=document.createElement("div"); right.className="act";
+    const bOpen=document.createElement("button"); bOpen.textContent="開く"; bOpen.onclick=()=>enterFolder(f.id,f.name);
+    const bDel=document.createElement("button"); bDel.textContent="削除"; bDel.onclick=()=>deleteFolder(f.id,f.name);
+    right.appendChild(bOpen); right.appendChild(bDel);
 
-    row.appendChild(left);row.appendChild(right);
+    row.appendChild(left); row.appendChild(right);
     list.appendChild(row);
   });
 }
-function enterFolder(id,name){breadcrumb.push({id,name});loadFolder(id,true,"enter");}
+function enterFolder(id,name){ breadcrumb.push({id,name}); loadFolder(id,true,"enter"); }
 
 async function deleteFolder(id,name){
   if(!confirm(`「${name}」を削除します。よろしいですか？`)) return;
@@ -220,25 +226,25 @@ async function deleteFolder(id,name){
   }
 }
 
-$("btnBack").onclick=()=>{if(!historyStack.length)return;const prev=historyStack.pop();loadFolder(prev,false,"back");};
-$("btnUp").onclick=()=>{if(breadcrumb.length<=1)return;breadcrumb.pop();loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up");};
+$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); loadFolder(prev,false,"back"); };
+$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
 $("btnReload").onclick=()=>loadFolder(currentId,false,"reload");
 
 // 新規フォルダ
 async function createFolderCall(url,parentId,name){
   const body={parentId:parentId||"root",name:(name||"").trim(),conflictBehavior:"rename"};
   const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const txt=await r.text();let j;try{j=JSON.parse(txt);}catch{j={raw:txt};}
+  const txt=await r.text(); let j; try{ j=JSON.parse(txt);}catch{ j={raw:txt}; }
   log(`POST ${url} → ${r.status}\nreq=${JSON.stringify(body)}\nres=${txt.substring(0,200)}`);
-  return{ok:r.ok,status:r.status,json:j};
+  return { ok:r.ok, status:r.status, json:j };
 }
 $("btnNewFolder").onclick=async()=>{
-  const base=prompt("新しいフォルダ名?","");if(!base)return;const name=base.trim();if(!name)return;
+  const base=prompt("新しいフォルダ名?",""); if(!base) return; const name=base.trim(); if(!name) return;
   const pid=(!currentId||currentId==="undefined"||currentId==="null")?"root":currentId;
   let res=await createFolderCall(EP_CREATE_FOLDER,pid,name);
-  if(res.status===404){res=await createFolderCall(EP_CREATE_FOLDER_ALT,pid,name);}
-  if(res.ok){log(`📁 作成: ${res.json.name}`);await loadFolder(pid,false,"created");}
-  else{alert("作成失敗: "+res.status);}
+  if(res.status===404){ res=await createFolderCall(EP_CREATE_FOLDER_ALT,pid,name); }
+  if(res.ok){ log(`📁 作成: ${res.json.name}`); await loadFolder(pid,false,"created"); }
+  else { alert("作成失敗: "+res.status); }
 };
 
 $("pickerCancel").onclick=closePicker;
@@ -251,10 +257,10 @@ async function uploadOne(endpoint,ticket,nameOverride){
   if(nameOverride) fd.append("fileName",nameOverride);
   const r=await fetch(endpoint,{method:"POST",body:fd});
   const j=await r.json().catch(()=>({}));
-  return{ok:r.ok,status:r.status,body:j};
+  return { ok:r.ok, status:r.status, body:j };
 }
 
-// .msg → xlsx チケット化
+// .msg → .xlsx チケット化
 async function createXlsxTicketFromMsg(msgTicket){
   const body = { ticket: msgTicket };
   const r = await fetch(EP_MSG_TO_XLSX_TID, {
@@ -263,14 +269,12 @@ async function createXlsxTicketFromMsg(msgTicket){
     body: JSON.stringify(body)
   });
   const j = await r.json().catch(()=>({}));
-  if (!r.ok || !j.ok) {
-    throw new Error("msg-to-xlsx-ticket failed: "+JSON.stringify(j));
-  }
+  if (!r.ok || !j.ok) throw new Error("msg-to-xlsx-ticket failed: "+JSON.stringify(j));
   return j; // { ok, ticket, fileName }
 }
 
 // === 追加ここから（upload-from-url）===
-// GitHub Raw 等のURLから直接アップロード
+// URLから直接アップロード（GitHub Rawなど）
 async function uploadFromUrl(url, folderId, fileName){
   const body = { url, folderId, fileName };
   const r = await fetch(EP_UPLOAD_FROM_URL, {
@@ -279,18 +283,18 @@ async function uploadFromUrl(url, folderId, fileName){
     body: JSON.stringify(body)
   });
   const j = await r.json().catch(()=>({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok:r.ok, status:r.status, body:j };
 }
 // === 追加ここまで（upload-from-url）===
 
-// ===== 3つすべて保存（来ているチケットは全部） =====
+// ===== 3つすべて保存（来ているチケットは全部） + 4つ目のGitHub保存 =====
 async function doUpload(){
   if(!pickedFolderId){ alert("保存先フォルダを選んでください"); return; }
 
   // 入力されたベース名
   const emlBase  = ($("emlBase").value  || "Report").trim();
   const xlsxBase = ($("xlsxBase").value || "SkillSheet").trim();
-  const emlName = emlBase ? (emlBase.toLowerCase().endsWith(".eml") ? emlBase : emlBase + ".eml") : "Report.eml";
+  const emlName = emlBase.toLowerCase().endsWith(".eml") ? emlBase : (emlBase + ".eml");
 
   // 3点：EML / MSG / (MSG→)XLSX を全保存（来ているものは全部）
   const want_eml  = Boolean(T_EML || TICKET_SINGLE);
@@ -298,7 +302,7 @@ async function doUpload(){
   const want_xlsx = Boolean(T_MSG || T_XLSX);
 
   if(!want_eml && !want_msg && !want_xlsx){
-    alert("保存するチケットがありません（クエリに ticket_eml / ticket_msg / ticket_xlsx のいずれかが必要）");
+    alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx のいずれかが必要）");
     return;
   }
 
@@ -347,8 +351,7 @@ async function doUpload(){
       log(r.ok ? "✅ 添付Excelスキルシート保存成功" : "❌ xlsx " + JSON.stringify(r.body));
     }
 
-    // === 追加ここから（upload-from-url）===
-    // 5) GitHub Raw から「4つ目」を保存（固定URL・固定名の例）
+    // 5) 4つ目：GitHub Raw から保存
     try{
       log("→ upload-from-url: " + GITHUB_RAW_URL);
       const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
@@ -360,7 +363,6 @@ async function doUpload(){
     }catch(e){
       log("⚠️ upload-from-url エラー: " + e.message);
     }
-    // === 追加ここまで（upload-from-url）===
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
   } catch(e){
@@ -373,7 +375,6 @@ $("openPicker").onclick=openPicker;
 $("pickerSave").onclick=async ()=>{
   if(!pickedFolderId){ return; }
   closePicker();
-  await doUpload(); // ✅ ピッカー内の「保存」で即アップロード
+  await doUpload(); // ピッカー内の「保存」で即アップロード
 };
 </script>
-
