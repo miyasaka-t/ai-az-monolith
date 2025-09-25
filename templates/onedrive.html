@@ -134,6 +134,13 @@ const EP_CREATE_FOLDER_ALT= "/api/drive/createFolder";
 const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
 const EP_DELETE_FOLDER    = "/api/drive/delete-folder";
 
+// === 追加ここから（upload-from-url）===
+const EP_UPLOAD_FROM_URL  = "/api/upload-from-url";
+// 任意：固定で毎回保存したい GitHub Raw のURLと保存名
+const GITHUB_RAW_URL      = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/%E5%8D%B0%E5%88%B7_%E3%83%97%E3%83%AD%E3%83%91%E3%83%86%E3%82%A3%E3%83%BC_%E3%83%9E%E3%82%AF%E3%83%AD.xlsm";
+const GITHUB_SAVE_NAME    = "印刷_プロパティーマクロ.xlsm";
+// === 追加ここまで（upload-from-url）===
+
 // 初期ヒント
 (function initHints(){
   $("nm_eml_hint").textContent  = "保存時は「" + $("emlBase").value + ".eml」を強制付与";
@@ -187,7 +194,7 @@ function renderList(folders){
       $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")+"/"+f.name;
     };
     // ダブルクリックで開く
-    left.ondblclick=()=>enterFolder(f.id,f.name);
+    left.ondblclick()=>enterFolder(f.id,f.name);
 
     const right=document.createElement("div");right.className="act";
     const bOpen=document.createElement("button");bOpen.textContent="開く";bOpen.onclick=()=>enterFolder(f.id,f.name);
@@ -262,6 +269,20 @@ async function createXlsxTicketFromMsg(msgTicket){
   return j; // { ok, ticket, fileName }
 }
 
+// === 追加ここから（upload-from-url）===
+// GitHub Raw 等のURLから直接アップロード
+async function uploadFromUrl(url, folderId, fileName){
+  const body = { url, folderId, fileName };
+  const r = await fetch(EP_UPLOAD_FROM_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(()=>({}));
+  return { ok: r.ok, status: r.status, body: j };
+}
+// === 追加ここまで（upload-from-url）===
+
 // ===== 3つすべて保存（来ているチケットは全部） =====
 async function doUpload(){
   if(!pickedFolderId){ alert("保存先フォルダを選んでください"); return; }
@@ -325,6 +346,21 @@ async function doUpload(){
       const r = await uploadOne(EP_UPLOAD_ORG, xlsxTicket, xlsxFinalName);
       log(r.ok ? "✅ 添付Excelスキルシート保存成功" : "❌ xlsx " + JSON.stringify(r.body));
     }
+
+    // === 追加ここから（upload-from-url）===
+    // 5) GitHub Raw から「4つ目」を保存（固定URL・固定名の例）
+    try{
+      log("→ upload-from-url: " + GITHUB_RAW_URL);
+      const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
+      if (r4.ok && r4.body && r4.body.ok) {
+        log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
+      } else {
+        log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
+      }
+    }catch(e){
+      log("⚠️ upload-from-url エラー: " + e.message);
+    }
+    // === 追加ここまで（upload-from-url）===
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
   } catch(e){
