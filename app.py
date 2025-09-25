@@ -980,6 +980,73 @@ def _handle_eml_bytes(b: bytes) -> Dict:
 
     return {"ok": True, "format": "eml", "body_text": body_text, "excel_attachments": excel_results}
 
+# ---- GitHub Raw などのURLから直接ダウンロードして保存（第4のファイル）
+@app.post("/api/upload-from-url")
+def api_upload_from_url():
+    """
+    JSON:
+      {
+        "url": "https://raw.githubusercontent.com/<user>/<repo>/<ref>/<path/to/file>",
+        "folderId": "<OneDrive itemId>",
+        "fileName": "任意の保存名（省略可。省略時はURL末尾名を使用）"
+      }
+    成功: {"ok": true, "id": "...", "webUrl": "...", "name": "..."}
+    """
+    try:
+        j = request.get_json(force=True, silent=False)
+        url = (j.get("url") or j.get("href") or "").strip()
+        folder_id = (j.get("folderId") or "").strip()
+        name_ovr = (j.get("fileName") or "").strip()
+
+        if not url or not folder_id:
+            return jsonify({"error": "missing url or folderId"}), 400
+
+        # 1) URL 叩いてバイト取得
+        r = requests.get(url, timeout=60)
+        r.raise_for_status()
+        data = r.content
+        mime = (r.headers.get("Content-Type") or
+                mimetypes.guess_type(url)[0] or
+                "application/octet-stream")
+
+        # 2) 保存名の決定（指定がなければURL末尾）
+        if not name_ovr:
+            from urllib.parse import urlparse, unquote
+            path = unquote(urlparse(url).path or "")
+            base = (path.rsplit("/", 1)[-1] or "download.bin")
+            name_ovr = base
+
+        # 3) OneDrive へアップロード（小/大で分岐）
+        if len(data) <= SMALL_MAX_BYTES:
+            up = graph_put_small_to_folder_org(folder_id, name_ovr, mime, data)
+        else:
+            up = graph_put_chunked_to_folder_org(folder_id, name_ovr, data)
+
+        if up.status_code in (200, 201):
+            jj = up.json()
+            return jsonify({
+                "ok": True,
+                "id": jj.get("id"),
+                "webUrl": jj.get("webUrl"),
+                "name": jj.get("name")
+            })
+        else:
+            return jsonify({
+                "error": "graph_upload_failed",
+                "status": up.status_code,
+                "detail": up.text[:4000]
+            }), up.status_code
+
+    except requests.HTTPError as e:
+        return jsonify({
+            "error": "download_http_error",
+            "status": getattr(e.response, "status_code", None),
+            "detail": getattr(e.response, "text", "")[:4000]
+        }), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
 # ===============================
 # メイン
 # ===============================
