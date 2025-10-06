@@ -66,8 +66,8 @@
     <div class="muted" id="nm_eml_hint"></div>
   </div>
   <div class="col">
-    <label class="small">添付Excelのベース名（拡張子は添付のオリジナルを強制付与）</label>
-    <input id="xlsxBase" type="text" placeholder="SkillSheet">
+    <label class="small">添付ファイルのベース名（拡張子は添付のオリジナルを強制付与）</label>
+    <input id="xlsxBase" type="text" placeholder="Attachment">
     <div class="muted" id="nm_xlsx_hint"></div>
   </div>
 </div>
@@ -110,7 +110,7 @@
 
 <script>
 const $ = (id)=>document.getElementById(id);
-const log = (m)=>{ $("log").textContent += m + "\n"; };
+const log = (m)=>{ $("log").textContent += m + "\\n"; };
 
 // ===== クエリ初期化 =====
 const q = new URLSearchParams(location.search);
@@ -121,7 +121,7 @@ const TICKET_SINGLE = q.get("ticket") || "";
 
 // ベース名初期値
 const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
-const XLSX_BASE_INIT = (q.get("excel") || "SkillSheet").trim();
+const XLSX_BASE_INIT = (q.get("excel") || q.get("attach") || "Attachment").trim();
 $("emlBase").value  = EML_BASE_INIT;
 $("xlsxBase").value = XLSX_BASE_INIT;
 
@@ -132,14 +132,14 @@ const EP_LIST_FOLDERS     = "/api/drive/folders";
 const EP_CREATE_FOLDER    = "/api/drive/create-folder";
 const EP_CREATE_FOLDER_ALT= "/api/drive/createFolder";
 const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
+const EP_MSG_TO_ANY_TID   = "/api/msg-to-attachment-ticket"; // 追加
 const EP_DELETE_FOLDER    = "/api/drive/delete-folder";
 
-// === 追加ここから（upload-from-url）===
+// === 追加（upload-from-url）===
 const EP_UPLOAD_FROM_URL  = "/api/upload-from-url";
-// 固定のGitHub Rawファイル（必要に応じて変更/フォーム化OK）
 const GITHUB_RAW_URL   = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/%E5%8D%B0%E5%88%B7_%E3%83%97%E3%83%AD%E3%83%91%E3%83%86%E3%82%A3%E3%83%BC_%E3%83%9E%E3%82%AF%E3%83%AD.xlsm";
 const GITHUB_SAVE_NAME = "印刷_プロパティーマクロ.xlsm";
-// === 追加ここまで（upload-from-url）===
+// ============================
 
 // 初期ヒント
 (function initHints(){
@@ -189,7 +189,6 @@ function renderList(folders){
   folders.forEach(f=>{
     const row=document.createElement("div"); row.className="tr";
     const left=document.createElement("div"); left.className="rowbox name"; left.textContent="📁 "+f.name;
-    // クリックで選択
     left.onclick=()=>{
       if(selectedRowEl) selectedRowEl.classList.remove("selected");
       left.classList.add("selected");
@@ -199,7 +198,6 @@ function renderList(folders){
       $("pickerSave").disabled=false;
       $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")+"/"+f.name;
     };
-    // ✅ ダブルクリックで開く（修正済み）
     left.ondblclick = () => enterFolder(f.id,f.name);
 
     const right=document.createElement("div"); right.className="act";
@@ -235,7 +233,7 @@ async function createFolderCall(url,parentId,name){
   const body={parentId:parentId||"root",name:(name||"").trim(),conflictBehavior:"rename"};
   const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const txt=await r.text(); let j; try{ j=JSON.parse(txt);}catch{ j={raw:txt}; }
-  log(`POST ${url} → ${r.status}\nreq=${JSON.stringify(body)}\nres=${txt.substring(0,200)}`);
+  log(`POST ${url} → ${r.status}\\nreq=${JSON.stringify(body)}\\nres=${txt.substring(0,200)}`);
   return { ok:r.ok, status:r.status, json:j };
 }
 $("btnNewFolder").onclick=async()=>{
@@ -260,20 +258,19 @@ async function uploadOne(endpoint,ticket,nameOverride){
   return { ok:r.ok, status:r.status, body:j };
 }
 
-// .msg → .xlsx チケット化
-async function createXlsxTicketFromMsg(msgTicket){
-  const body = { ticket: msgTicket };
-  const r = await fetch(EP_MSG_TO_XLSX_TID, {
+// .msg / .eml → Excel/PDF/Word いずれかの最初の添付をチケット化
+async function createAttachmentTicketFromMsg(msgTicket, fileNameBase){
+  const body = { ticket: msgTicket, fileName: fileNameBase || "Attachment" };
+  const r = await fetch(EP_MSG_TO_ANY_TID, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
   const j = await r.json().catch(()=>({}));
-  if (!r.ok || !j.ok) throw new Error("msg-to-xlsx-ticket failed: "+JSON.stringify(j));
-  return j; // { ok, ticket, fileName }
+  if (!r.ok || !j.ok) throw new Error("msg-to-attachment-ticket failed: "+JSON.stringify(j));
+  return j; // { ok, ticket, fileName, kind }
 }
 
-// === 追加ここから（upload-from-url）===
 // URLから直接アップロード（GitHub Rawなど）
 async function uploadFromUrl(url, folderId, fileName){
   const body = { url, folderId, fileName };
@@ -285,41 +282,41 @@ async function uploadFromUrl(url, folderId, fileName){
   const j = await r.json().catch(()=>({}));
   return { ok:r.ok, status:r.status, body:j };
 }
-// === 追加ここまで（upload-from-url）===
 
-// ===== 3つすべて保存（来ているチケットは全部） + 4つ目のGitHub保存 =====
+// ===== 保存シーケンス =====
 async function doUpload(){
   if(!pickedFolderId){ alert("保存先フォルダを選んでください"); return; }
 
   // 入力されたベース名
   const emlBase  = ($("emlBase").value  || "Report").trim();
-  const xlsxBase = ($("xlsxBase").value || "SkillSheet").trim();
+  const attachBase = ($("xlsxBase").value || "Attachment").trim();
   const emlName = emlBase.toLowerCase().endsWith(".eml") ? emlBase : (emlBase + ".eml");
 
-  // 3点：EML / MSG / (MSG→)XLSX を全保存（来ているものは全部）
+  // 期待フラグ
   const want_eml  = Boolean(T_EML || TICKET_SINGLE);
   const want_msg  = Boolean(T_MSG);
-  const want_xlsx = Boolean(T_MSG || T_XLSX);
 
-  if(!want_eml && !want_msg && !want_xlsx){
+  if(!want_eml && !want_msg && !T_XLSX){
     alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx のいずれかが必要）");
     return;
   }
 
   try {
-    // 1) xlsx チケットの用意（拡張子確認のため最初に）
-    let xlsxTicket = null;
-    let xlsxOrigFileName = null;
-    if (want_xlsx) {
-      if (T_MSG) {
-        log("→ msg-to-xlsx-ticket");
-        const j = await createXlsxTicketFromMsg(T_MSG);
-        xlsxTicket = j.ticket;
-        xlsxOrigFileName = (j.fileName || "").trim();
-        log("xlsx ticket ok: " + xlsxOrigFileName);
-      } else if (T_XLSX) {
-        xlsxTicket = T_XLSX;
-        xlsxOrigFileName = "attachment.xlsx";
+    // 1) まず .msg の最初の添付（Excel>PDF>Word）をチケット化して種類を判定
+    let kind = null;
+    let attTicket = null;
+    let attOrigName = null;
+
+    if (T_MSG) {
+      try{
+        log("→ msg-to-attachment-ticket");
+        const j = await createAttachmentTicketFromMsg(T_MSG, attachBase);
+        attTicket = j.ticket;
+        attOrigName = (j.fileName || "").trim();
+        kind = j.kind; // 'excel' | 'pdf' | 'word'
+        log("attachment ticket ok: " + attOrigName + " (kind=" + kind + ")");
+      }catch(e){
+        log("⚠️ 添付検出なし（または対象外）: " + e.message);
       }
     }
 
@@ -338,30 +335,48 @@ async function doUpload(){
       log(r.ok ? "✅ BPさんからのメール保存成功" : "❌ msg " + JSON.stringify(r.body));
     }
 
-    // 4) xlsx 保存（ベース名 + 元拡張子）
-    if (want_xlsx && xlsxTicket) {
-      let ext = ".xlsx";
-      if (xlsxOrigFileName && xlsxOrigFileName.includes(".")) {
-        const i = xlsxOrigFileName.lastIndexOf(".");
-        ext = xlsxOrigFileName.slice(i);
-      }
-      const xlsxFinalName = (xlsxBase || "SkillSheet") + ext;
-      log("→ xlsx upload as: " + xlsxFinalName);
-      const r = await uploadOne(EP_UPLOAD_ORG, xlsxTicket, xlsxFinalName);
-      log(r.ok ? "✅ 添付Excelスキルシート保存成功" : "❌ xlsx " + JSON.stringify(r.body));
-    }
+    // 4) 添付保存の分岐
+    if (attTicket && kind) {
+      // 添付名はチケット生成時に拡張子を合わせてあるので、そのまま使う
+      log("→ attachment upload as: " + attOrigName);
+      const r = await uploadOne(EP_UPLOAD_ORG, attTicket, attOrigName);
+      log(r.ok ? "✅ 添付保存成功 ("+kind+")" : "❌ attachment " + JSON.stringify(r.body));
 
-    // 5) 4つ目：GitHub Raw から保存
-    try{
-      log("→ upload-from-url: " + GITHUB_RAW_URL);
-      const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
-      if (r4.ok && r4.body && r4.body.ok) {
-        log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
-      } else {
-        log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
+      // Excel のときだけ GitHub Raw を追加保存（従来の4点保存を踏襲）
+      if (kind === "excel") {
+        try{
+          log("→ upload-from-url: " + GITHUB_RAW_URL);
+          const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
+          if (r4.ok && r4.body && r4.body.ok) {
+            log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
+          } else {
+            log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
+          }
+        }catch(e){
+          log("⚠️ upload-from-url エラー: " + e.message);
+        }
       }
-    }catch(e){
-      log("⚠️ upload-from-url エラー: " + e.message);
+    } else if (T_XLSX) {
+      // 直接 xlsx チケットが来ている場合（従来互換）
+      const xlsxOrigFileName = "attachment.xlsx";
+      log("→ xlsx upload as: " + (attachBase + ".xlsx"));
+      const r = await uploadOne(EP_UPLOAD_ORG, T_XLSX, attachBase + ".xlsx");
+      log(r.ok ? "✅ 添付Excel保存成功" : "❌ xlsx " + JSON.stringify(r.body));
+
+      // 従来の4点保存（GitHub）も実施
+      try{
+        log("→ upload-from-url: " + GITHUB_RAW_URL);
+        const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
+        if (r4.ok && r4.body && r4.body.ok) {
+          log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
+        } else {
+          log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
+        }
+      }catch(e){
+        log("⚠️ upload-from-url エラー: " + e.message);
+      }
+    } else {
+      log("ℹ️ 添付保存スキップ（対象添付なし）");
     }
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);

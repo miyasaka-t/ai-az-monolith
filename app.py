@@ -11,7 +11,7 @@ import html as _html
 # ===== excel_api.py 由来の追加 import（仕様変更なしで合体） =====
 import html  # excel_api.py で使用
 from io import BytesIO
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 from openpyxl import load_workbook
 import xlrd  # .xls対応
 from email import policy
@@ -116,7 +116,7 @@ def graph_put_chunked_to_folder_org(folder_id, name, data):
         off += len(chunk)
     return last
 
-# ---- メタ/フォルダ列挙/パンくず/作成
+# ---- メタ/フォルダ列挙/パンくず/作成/削除
 def graph_get_item_meta(item_id):
     url = f"{GRAPH_BASE}/users/{TARGET_USER_ID}/drive/items/{item_id}"
     r = requests.get(url, headers=_auth_headers(), timeout=30)
@@ -160,10 +160,6 @@ def graph_create_folder(parent_id: str, name: str, conflict_behavior="rename"):
     return r.json()
 
 def graph_delete_item(item_id: str):
-    """
-    OneDrive 上の任意アイテム（フォルダ/ファイル）を削除。
-    成功時は True を返す。失敗時は requests.HTTPError を送出。
-    """
     if not item_id:
         raise ValueError("missing item_id")
     url = f"{GRAPH_BASE}/users/{TARGET_USER_ID}/drive/items/{item_id}"
@@ -195,7 +191,7 @@ def build_eml_bytes(subject, from_addr, to_addrs, body_text="", body_html=None, 
     return msg.as_bytes()
 
 # ===============================
-# バイト展開 / .msg抽出 / .eml抽出
+# バイト展開 / .msg抽出 / .eml抽出（+ 任意添付抽出を追加）
 # ===============================
 def materialize_bytes(meta):
     """
@@ -237,11 +233,43 @@ def materialize_bytes(meta):
     else:
         return meta.get("fileName") or "download.bin", base64.b64decode(meta.get("data") or ""), meta.get("mime") or "application/octet-stream"
 
+def _is_excel_filename(name: str) -> bool:
+    n = (name or "").lower()
+    return n.endswith((".xlsx", ".xlsm", ".xls", ".csv"))
+
+def _is_excel_mime(mime: str) -> bool:
+    m = (mime or "").lower()
+    return (
+        m.startswith("application/vnd.openxmlformats-officedocument.spreadsheetml")
+        or m == "application/vnd.ms-excel"
+        or m == "text/csv"
+    )
+
+def _is_pdf_filename(name: str) -> bool:
+    return (name or "").lower().endswith(".pdf")
+
+def _is_pdf_mime(mime: str) -> bool:
+    return (mime or "").lower() == "application/pdf"
+
+def _is_word_filename(name: str) -> bool:
+    n = (name or "").lower()
+    return n.endswith((".docx", ".doc"))
+
+def _is_word_mime(mime: str) -> bool:
+    m = (mime or "").lower()
+    return m in ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword")
+
+def _classify_by_name_mime(name: Optional[str], mime: Optional[str]) -> Optional[str]:
+    """ return 'excel' | 'pdf' | 'word' | None """
+    if _is_excel_filename(name or "") or _is_excel_mime(mime or ""):
+        return "excel"
+    if _is_pdf_filename(name or "") or _is_pdf_mime(mime or ""):
+        return "pdf"
+    if _is_word_filename(name or "") or _is_word_mime(mime or ""):
+        return "word"
+    return None
+
 def _extract_first_excel_from_msg(msg_bytes: bytes):
-    """
-    .msgバイナリから最初の Excel/CSV を抽出
-    戻り値: (filename, data_bytes, mime) / None
-    """
     import extract_msg  # pip install extract-msg
     with tempfile.NamedTemporaryFile(suffix=".msg", delete=True) as tmp:
         tmp.write(msg_bytes); tmp.flush()
@@ -260,17 +288,8 @@ def _extract_first_excel_from_msg(msg_bytes: bytes):
                 return fname, data, mime
     return None
 
-# NEW: .eml から最初の Excel/CSV を抽出
 def _extract_first_excel_from_eml(eml_bytes: bytes):
-    """
-    .eml(RFC822) から最初の Excel/CSV 添付を抽出
-    戻り値: (filename, data_bytes, mime) / None
-    """
-    from email import policy
-    from email.parser import BytesParser
-
     msg = BytesParser(policy=policy.default).parsebytes(eml_bytes)
-
     for part in msg.walk():
         fname = part.get_filename()
         if not fname:
@@ -287,21 +306,110 @@ def _extract_first_excel_from_eml(eml_bytes: bytes):
             return fname, data, mime
     return None
 
+def _extract_first_allowed_from_msg(msg_bytes: bytes) -> Optional[Tuple[str, bytes, str, str]]:
+    """
+    .msg から Excel -> PDF -> Word の優先順で最初の添付を抽出
+    戻り値: (filename, data_bytes, mime, kind) / None
+    """
+    with tempfile.NamedTemporaryFile(suffix=".msg", delete=True) as tmp:
+        tmp.write(msg_bytes); tmp.flush()
+        m = extract_msg.Message(tmp.name)
+
+        # 1回目スキャンで分類
+        candidates = []
+        for att in m.attachments:
+            fname = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or "attachment"
+            data = getattr(att, "data", None)
+            if not data:
+                continue
+            guess_mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+            kind = _classify_by_name_mime(fname, guess_mime)
+            if kind in ("excel", "pdf", "word"):
+                # 正確なMIMEに補正
+                if kind == "excel":
+                    if fname.lower().endswith(".xlsx"):
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    elif fname.lower().endswith((".xls", ".xlsm")):
+                        mime = "application/vnd.ms-excel"
+                    elif fname.lower().endswith(".csv"):
+                        mime = "text/csv"
+                    else:
+                        mime = guess_mime
+                elif kind == "pdf":
+                    mime = "application/pdf"
+                elif kind == "word":
+                    if fname.lower().endswith(".docx"):
+                        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    else:
+                        mime = "application/msword"
+                else:
+                    mime = guess_mime
+                candidates.append((fname, data, mime, kind))
+
+        # 優先順で返す
+        for want in ("excel", "pdf", "word"):
+            for c in candidates:
+                if c[3] == want:
+                    return c
+    return None
+
+def _extract_first_allowed_from_eml(eml_bytes: bytes) -> Optional[Tuple[str, bytes, str, str]]:
+    """
+    .eml から Excel -> PDF -> Word の優先順で最初の添付を抽出
+    戻り値: (filename, data_bytes, mime, kind) / None
+    """
+    msg = BytesParser(policy=policy.default).parsebytes(eml_bytes)
+    candidates = []
+    for part in msg.walk():
+        fname = part.get_filename()
+        cdisp = part.get_content_disposition()
+        ctype = part.get_content_type()
+        if cdisp == "attachment" or fname:
+            kind = _classify_by_name_mime(fname or "", ctype or "")
+            if kind in ("excel", "pdf", "word"):
+                data = part.get_payload(decode=True) or b""
+                if not data:
+                    continue
+                # MIME正規化
+                if kind == "excel":
+                    if (fname or "").lower().endswith(".xlsx"):
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    elif (fname or "").lower().endswith((".xls", ".xlsm")):
+                        mime = "application/vnd.ms-excel"
+                    elif (fname or "").lower().endswith(".csv"):
+                        mime = "text/csv"
+                    else:
+                        mime = ctype or "application/octet-stream"
+                elif kind == "pdf":
+                    mime = "application/pdf"
+                elif kind == "word":
+                    if (fname or "").lower().endswith(".docx"):
+                        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    else:
+                        mime = "application/msword"
+                else:
+                    mime = ctype or "application/octet-stream"
+                candidates.append((fname or "attachment", data, mime, kind))
+
+    for want in ("excel", "pdf", "word"):
+        for c in candidates:
+            if c[3] == want:
+                return c
+    return None
+
 # ===============================
 # OneDrive系 ルーティング
 # ===============================
 @app.get("/")
 def index():
-    return jsonify({"ok": True, "service": "onedrive-uploader-org", "version": "2025-09-03"})
+    return jsonify({"ok": True, "service": "onedrive-uploader-org", "version": "2025-10-03"})
 
 @app.get("/front")
 def serve_front():
-    # 自前ピッカーUIのHTML（templates/onedrive.html）を返す
     return send_from_directory(app.template_folder, "onedrive.html")
 
 @app.get("/picker-redirect.html")
 def picker_redirect():
-    # 必要に応じて使う軽量ページ（CSP干渉回避）
     html_s = "<!doctype html><meta charset='utf-8'><title>ok</title>OK"
     resp = app.response_class(html_s, mimetype="text/html")
     resp.headers.pop("Content-Security-Policy", None)
@@ -310,14 +418,6 @@ def picker_redirect():
 # --- 子フォルダ一覧
 @app.get("/api/drive/folders")
 def api_list_folders():
-    """
-    GET /api/drive/folders?parentId=<id|root>
-    戻り:
-      { "ok": true,
-        "parent": {"id": "...", "name": "...", "parentId": "..."} | null,
-        "folders": [ {"id":"...","name":"..."} ... ]
-      }
-    """
     parent_id = request.args.get("parentId", "root")
     try:
         folders = graph_list_child_folders(parent_id)
@@ -333,7 +433,6 @@ def api_list_folders():
 @app.post("/api/drive/createFolder")
 def api_create_folder():
     try:
-        # JSON / Form / Query 互換
         j = request.get_json(silent=True) or {}
         parent_id = (
             request.args.get("parentId")
@@ -360,15 +459,11 @@ def api_create_folder():
         return jsonify({"error": "graph_http_error", "status": e.response.status_code, "detail": e.response.text}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-    
-# --- フォルダ削除（新規）
+
+# --- フォルダ削除
 @app.post("/api/drive/delete-folder")
 @app.delete("/api/drive/delete-folder")
 def api_delete_folder():
-    """
-    JSON/Form/Query 互換:
-      id: 削除するフォルダ（またはアイテム）の itemId
-    """
     try:
         j = request.get_json(silent=True) or {}
         item_id = (
@@ -383,7 +478,7 @@ def api_delete_folder():
     except requests.HTTPError as e:
         return jsonify({"error": "graph_http_error", "status": e.response.status_code, "detail": e.response.text}), 502
     except Exception as e:
-        return jsonify({"error": str(e)}), 400    
+        return jsonify({"error": str(e)}), 400
 
 # --- Tickets: create
 @app.post("/tickets/create")
@@ -421,7 +516,7 @@ def tickets_create():
     except Exception as e:
         return jsonify({ "error": str(e)}), 400
 
-# --- Tickets: create-multipart（ファイル＋メタ／msg・eml→xlsx抽出オプション）
+# --- Tickets: create-multipart（ファイル＋メタ／msg・eml→添付抽出オプション）
 @app.post("/tickets/create-multipart")
 def tickets_create_multipart():
     """
@@ -433,10 +528,12 @@ def tickets_create_multipart():
           fileName, mime
           type: "base64"|"text"|"eml"|...
           data: (typeに応じて)
-          extractXlsx: true    # file が .msg/.eml のとき最初のExcelを抽出
+          extractXlsx: true    # 旧仕様: Excel/CSV 抽出
           xlsxFileName: "Attachment.xlsx"
+          extractFirstAllowed: true  # 新仕様: Excel→PDF→Word の順で最初の1件を抽出
+          allowedHintFileName: "Attachment"  # 保存名ベース（拡張子は添付に合わせる）
     戻り:
-      {"ok":true,"tickets":{"file":<ticket>|None,"metadata":<ticket>|None,"xlsxFromMsg":<ticket>|None}}
+      {"ok":true,"tickets":{"file":<ticket>|None,"metadata":<ticket>|None,"xlsxFromMsg":<ticket>|None,"firstAllowed":<ticket>|None,"firstAllowedName": "...", "firstAllowedKind": "excel|pdf|word"}}
     """
     try:
         meta_text = request.form.get("metadata", "") or ""
@@ -460,6 +557,9 @@ def tickets_create_multipart():
         made_file_ticket = None
         made_meta_ticket = None
         made_xlsx_ticket = None
+        made_first_allowed_ticket = None
+        made_first_allowed_name = None
+        made_first_allowed_kind = None
 
         f = request.files.get("file")
         raw = None
@@ -502,7 +602,7 @@ def tickets_create_multipart():
                 meta["data"] = meta_json.get("data") or ""
             made_meta_ticket = save_ticket(meta, ttl=ttl)
 
-        # CHANGED: .msg/.eml どちらでも Excel/CSV 抽出
+        # 旧: Excel/CSV 抽出
         if f and raw is not None and meta_json.get("extractXlsx"):
             up_lower = (getattr(f, "filename", "") or "").lower()
             hit = None
@@ -511,7 +611,6 @@ def tickets_create_multipart():
             elif up_lower.endswith(".eml"):
                 hit = _extract_first_excel_from_eml(raw)
             else:
-                # 拡張子不明なら両方試す
                 hit = _extract_first_excel_from_msg(raw) or _extract_first_excel_from_eml(raw)
 
             if hit:
@@ -526,7 +625,53 @@ def tickets_create_multipart():
                     "data": base64.b64encode(att_bytes).decode("ascii")
                 }, ttl=ttl)
 
-        return jsonify({"ok": True, "tickets": {"file": made_file_ticket, "metadata": made_meta_ticket, "xlsxFromMsg": made_xlsx_ticket}})
+        # 新: Excel→PDF→Word の順で最初の1件を抽出
+        if f and raw is not None and meta_json.get("extractFirstAllowed"):
+            up_lower = (getattr(f, "filename", "") or "").lower()
+            hit2 = None
+            if up_lower.endswith(".msg"):
+                hit2 = _extract_first_allowed_from_msg(raw)
+            elif up_lower.endswith(".eml"):
+                hit2 = _extract_first_allowed_from_eml(raw)
+            else:
+                hit2 = _extract_first_allowed_from_msg(raw) or _extract_first_allowed_from_eml(raw)
+
+            if hit2:
+                att_name, att_bytes, att_mime, kind = hit2
+                # 保存名ベースがあれば使い、拡張子は添付に合わせる
+                base = (meta_json.get("allowedHintFileName") or att_name or "attachment").strip()
+                # 末尾の拡張子を落として拡張子を付け直す
+                root, ext = os.path.splitext(att_name or "")
+                if not ext:
+                    # 付け直し用推定
+                    if kind == "excel":
+                        ext = ".xlsx"
+                    elif kind == "pdf":
+                        ext = ".pdf"
+                    elif kind == "word":
+                        ext = ".docx"
+                    else:
+                        ext = ""
+                # base から既存拡張子を除去
+                base_root, _ = os.path.splitext(base)
+                save_name = (base_root or "attachment") + ext
+                made_first_allowed_ticket = save_ticket({
+                    "type": "base64",
+                    "fileName": save_name,
+                    "mime": att_mime or "application/octet-stream",
+                    "data": base64.b64encode(att_bytes).decode("ascii")
+                }, ttl=ttl)
+                made_first_allowed_name = save_name
+                made_first_allowed_kind = kind
+
+        return jsonify({"ok": True, "tickets": {
+            "file": made_file_ticket,
+            "metadata": made_meta_ticket,
+            "xlsxFromMsg": made_xlsx_ticket,
+            "firstAllowed": made_first_allowed_ticket,
+            "firstAllowedName": made_first_allowed_name,
+            "firstAllowedKind": made_first_allowed_kind
+        }})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -549,16 +694,15 @@ def api_msg_to_xlsx_ticket():
     入力（どれでも可）:
       - form-data / query:
           ticket=<.msg/.eml のチケット> / msg_ticket= / fileName= / ttlSec=
-          file=<.msg/.eml を直接アップロード>   ← 新規対応
+          file=<.msg/.eml を直接アップロード>
       - JSON:
           {"ticket":"<MSG_OR_EML_TICKET>","fileName":"Attachment.xlsx","ttlSec":600}
           {"tickets":{"file":"<MSG_TICKET>"}}
           {"arg1":"{\"ticket\":\"...\",\"fileName\":\"...\"}"}
-          {"data":"<base64-raw>","fileName":"mail.eml","ttlSec":600}  ← 新規対応
+          {"data":"<base64-raw>","fileName":"mail.eml","ttlSec":600}
     出力: {"ok": true, "ticket": "<XLSX_TICKET>", "fileName": "…"}
     """
     try:
-        # 1) まずフォーム/クエリ系
         msg_tid = (
             request.form.get("ticket")
             or request.form.get("msg_ticket")
@@ -568,7 +712,6 @@ def api_msg_to_xlsx_ticket():
         name_ovr = request.form.get("fileName") or request.args.get("fileName")
         ttl_override = request.form.get("ttlSec") or request.args.get("ttlSec")
 
-        # 2) JSON も見て補完
         j = request.get_json(silent=True) or {}
         if not msg_tid:
             msg_tid = j.get("ticket") or j.get("msg_ticket")
@@ -589,7 +732,6 @@ def api_msg_to_xlsx_ticket():
 
         ttl = int(ttl_override or DEFAULT_TICKET_TTL)
 
-        # 3) 入力ソースの決定（優先順：form の file > ticket > JSON data）
         raw = None
         src_name = None
 
@@ -607,7 +749,6 @@ def api_msg_to_xlsx_ticket():
         if not raw:
             return jsonify({"error": "missing input (ticket or file or data)"}), 400
 
-        # 4) .msg/.eml を判定して抽出（拡張子で分けつつ、必要なら両方試す）
         lower = (src_name or "").lower()
         hit = None
         if lower.endswith(".msg"):
@@ -633,6 +774,96 @@ def api_msg_to_xlsx_ticket():
         }, ttl=ttl)
 
         return jsonify({"ok": True, "ticket": x_tid, "fileName": save_name})
+
+    except KeyError:
+        return jsonify({"error": "ticket_not_found_or_expired"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# ---- NEW: .msg/.eml → Excel/PDF/Word のうち最初の1件をチケット化（非消費 & 直ファイル対応）
+@app.post("/api/msg-to-attachment-ticket")
+def api_msg_to_attachment_ticket():
+    """
+    入力: /api/msg-to-xlsx-ticket と同様（ticket / file / data いずれか）
+    出力: {"ok": true, "ticket": "<TICKET>", "fileName": "…", "kind": "excel|pdf|word"}
+    """
+    try:
+        msg_tid = (
+            request.form.get("ticket")
+            or request.form.get("msg_ticket")
+            or request.args.get("ticket")
+            or request.args.get("msg_ticket")
+        )
+        name_ovr = request.form.get("fileName") or request.args.get("fileName")
+        ttl_override = request.form.get("ttlSec") or request.args.get("ttlSec")
+
+        j = request.get_json(silent=True) or {}
+        if not msg_tid:
+            msg_tid = j.get("ticket") or j.get("msg_ticket")
+            if not msg_tid and isinstance(j.get("tickets"), dict):
+                msg_tid = j["tickets"].get("file") or j["tickets"].get("msg") or j["tickets"].get("ticket_msg")
+            if not msg_tid and isinstance(j.get("arg1"), str):
+                try:
+                    j2 = json.loads(j["arg1"])
+                    msg_tid = j2.get("ticket") or j2.get("msg_ticket")
+                    if not name_ovr: name_ovr = j2.get("fileName")
+                    if not ttl_override: ttl_override = j2.get("ttlSec")
+                except Exception:
+                    pass
+        if not name_ovr:
+            name_ovr = j.get("fileName")
+        if not ttl_override:
+            ttl_override = j.get("ttlSec")
+
+        ttl = int(ttl_override or DEFAULT_TICKET_TTL)
+
+        raw = None
+        src_name = None
+
+        f = request.files.get("file") or request.files.get("msg") or request.files.get("eml")
+        if f:
+            raw = f.read()
+            src_name = getattr(f, "filename", None) or "upload.bin"
+        elif msg_tid:
+            meta = redeem_ticket(msg_tid, consume=False)
+            src_name, raw, _ = materialize_bytes(meta)
+        elif j.get("data"):
+            raw = base64.b64decode(j["data"])
+            src_name = j.get("fileName") or "upload.bin"
+
+        if not raw:
+            return jsonify({"error": "missing input (ticket or file or data)"}), 400
+
+        lower = (src_name or "").lower()
+        hit = None
+        if lower.endswith(".msg"):
+            hit = _extract_first_allowed_from_msg(raw)
+        elif lower.endswith(".eml"):
+            hit = _extract_first_allowed_from_eml(raw)
+        else:
+            hit = _extract_first_allowed_from_msg(raw) or _extract_first_allowed_from_eml(raw)
+
+        if not hit:
+            return jsonify({"error": "no_allowed_attachment_found"}), 404
+
+        att_name, att_bytes, att_mime, kind = hit
+
+        # 保存名：name_ovr があればそのルート + 添付拡張子、なければ att_name を使用
+        if name_ovr:
+            root, _ = os.path.splitext(name_ovr.strip())
+            ext = os.path.splitext(att_name or "")[1] or (".xlsx" if kind == "excel" else ".pdf" if kind == "pdf" else ".docx")
+            save_name = (root or "attachment") + ext
+        else:
+            save_name = att_name or "attachment"
+
+        t_id = save_ticket({
+            "type": "base64",
+            "fileName": save_name,
+            "mime": att_mime or "application/octet-stream",
+            "data": base64.b64encode(att_bytes).decode("ascii")
+        }, ttl=ttl)
+
+        return jsonify({"ok": True, "ticket": t_id, "fileName": save_name, "kind": kind})
 
     except KeyError:
         return jsonify({"error": "ticket_not_found_or_expired"}), 404
@@ -736,7 +967,6 @@ def api_upload_msg_xlsx():
 # ======== excel_api 追加分: /extract /extract_mail （仕様そのまま） ========
 # ===============================
 
-# excel_api 上限（元のまま）
 MAX_ROWS = 200
 MAX_COLS = 50
 MAX_NONEMPTY = 2000  # 非空セル最大数
@@ -842,17 +1072,6 @@ def _excel_sparse_from_bytes(data: bytes,
     if name.endswith(".xls"):
         return _excel_sparse_from_xls_bytes(data, max_rows, max_cols, max_nonempty)
     return _excel_sparse_from_xlsx_bytes(data, sheet_req, max_rows, max_cols, max_nonempty)
-
-def _is_excel_filename(name: str) -> bool:
-    n = (name or "").lower()
-    return n.endswith((".xlsx", ".xlsm", ".xls"))
-
-def _is_excel_mime(mime: str) -> bool:
-    m = (mime or "").lower()
-    return (
-        m.startswith("application/vnd.openxmlformats-officedocument.spreadsheetml")
-        or m == "application/vnd.ms-excel"
-    )
 
 @app.route("/extract", methods=["POST"])
 def extract():
@@ -1001,7 +1220,6 @@ def api_upload_from_url():
         if not url or not folder_id:
             return jsonify({"error": "missing url or folderId"}), 400
 
-        # 1) URL 叩いてバイト取得
         r = requests.get(url, timeout=60)
         r.raise_for_status()
         data = r.content
@@ -1009,14 +1227,12 @@ def api_upload_from_url():
                 mimetypes.guess_type(url)[0] or
                 "application/octet-stream")
 
-        # 2) 保存名の決定（指定がなければURL末尾）
         if not name_ovr:
             from urllib.parse import urlparse, unquote
             path = unquote(urlparse(url).path or "")
             base = (path.rsplit("/", 1)[-1] or "download.bin")
             name_ovr = base
 
-        # 3) OneDrive へアップロード（小/大で分岐）
         if len(data) <= SMALL_MAX_BYTES:
             up = graph_put_small_to_folder_org(folder_id, name_ovr, mime, data)
         else:
