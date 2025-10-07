@@ -121,7 +121,12 @@ const TICKET_SINGLE = q.get("ticket") || "";
 
 // ベース名初期値
 const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
-const XLSX_BASE_INIT = (q.get("excel") || "SkillSheet").trim();
+
+// 添付ベース名（クエリ優先・複数エイリアスに対応 / デフォルトは従来互換の "SkillSheet"）
+const ATTACH_Q =
+  (q.get("attach") ?? q.get("excel") ?? q.get("xlsx") ?? q.get("name_xlsx") ?? "").trim();
+const XLSX_BASE_INIT = ATTACH_Q || "SkillSheet";
+
 $("emlBase").value  = EML_BASE_INIT;
 $("xlsxBase").value = XLSX_BASE_INIT;
 
