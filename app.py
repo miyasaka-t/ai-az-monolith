@@ -1266,10 +1266,6 @@ def api_upload_from_url():
 # ===============================
 # メイン
 # ===============================
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
 # ========= PDF → table text extractor (PyMuPDF) =========
 # Requirements:
 #   pip install pymupdf
