@@ -1274,11 +1274,11 @@ if __name__ == "__main__":
 # Requirements:
 #   pip install pymupdf
 # Usage:
-#   1) app.py で Flask を使っている前提（from flask import request, jsonify）
+#   1) app.py で Flask を使っている前提（from flask import Flask などで app が存在）
 #   2) このブロックを app.py に追記
 #   3) POST /extract_pdf_tables に multipart/form-data で file=PDF を投げる
 #
-# 出力は /extract_mail と同じノリの JSON:
+# 出力は /extract_mail と同じノリの JSON（※日本語はエスケープしないUTF-8で返却）:
 # {
 #   "ok": true,
 #   "filename": "xxx.pdf",
@@ -1287,6 +1287,9 @@ if __name__ == "__main__":
 #   "tables_text": "項番 | 在籍期間 | ...\n1 | 2009/7～2011/8 | ...\n...",
 #   "suggested_columns": [[...], ...]  # 今は未使用/将来拡張用
 # }
+
+from flask import request, jsonify, Response
+import json
 
 def _median(vals):
     try:
@@ -1395,29 +1398,30 @@ def _extract_pdf_to_tabletext_bytes(pdf_bytes: bytes) -> dict:
         "suggested_columns": page_columns,
     }
 
-# ---- Flask endpoint (JSON, Dify-friendly) ----
+# ---- Flask endpoint (JSON, Dify-friendly, 日本語エスケープしない) ----
 @app.post("/extract_pdf_tables")
 def extract_pdf_tables():
     """
     multipart/form-data:
       file: (required) PDF
-    return: JSON（/extract_mail を参考にした素朴な形）
+    return: JSON（/extract_mail を参考にした素朴な形, UTF-8, ensure_ascii=False）
     """
     up = request.files.get("file")
     if not up:
-        return jsonify({"ok": False, "error": "file is required (multipart/form-data)"}), 400
+        payload = {"ok": False, "error": "file is required (multipart/form-data)"}
+        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
 
     fname = up.filename or "upload.pdf"
     data = up.read() or b""
     if not data:
-        return jsonify({"ok": False, "error": "empty file"}), 400
+        payload = {"ok": False, "error": "empty file", "filename": fname}
+        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
 
     try:
         result = _extract_pdf_to_tabletext_bytes(data)
-        if not result.get("ok"):
-            result["filename"] = fname
-            return jsonify(result), 500
         result["filename"] = fname
-        return jsonify(result)
+        status = 200 if result.get("ok") else 500
+        return Response(json.dumps(result, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=status)
     except Exception as e:
-        return jsonify({"ok": False, "error": f"extract_failed: {e}", "filename": fname}), 400
+        payload = {"ok": False, "error": f"extract_failed: {e}", "filename": fname}
+        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
