@@ -1269,3 +1269,155 @@ def api_upload_from_url():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+# ========= PDF → table text extractor (PyMuPDF) =========
+# Requirements:
+#   pip install pymupdf
+# Usage:
+#   1) app.py で Flask を使っている前提（from flask import request, jsonify）
+#   2) このブロックを app.py に追記
+#   3) POST /extract_pdf_tables に multipart/form-data で file=PDF を投げる
+#
+# 出力は /extract_mail と同じノリの JSON:
+# {
+#   "ok": true,
+#   "filename": "xxx.pdf",
+#   "pages": 2,
+#   "rows": 340,
+#   "tables_text": "項番 | 在籍期間 | ...\n1 | 2009/7～2011/8 | ...\n...",
+#   "suggested_columns": [[...], ...]  # 今は未使用/将来拡張用
+# }
+
+def _median(vals):
+    try:
+        import statistics
+        return statistics.median(vals) if vals else None
+    except Exception:
+        return None
+
+def _extract_pdf_to_tabletext_bytes(pdf_bytes: bytes) -> dict:
+    try:
+        import fitz  # PyMuPDF
+    except Exception as e:
+        return {"ok": False, "error": f"pymupdf_not_available: {e}"}
+
+    import io
+    doc = fitz.open(stream=io.BytesIO(pdf_bytes).getvalue(), filetype="pdf")
+
+    all_lines = []          # 最終的に LLM に渡す "表テキスト" の行
+    page_columns = []       # 将来用（列ルーラーのヒント）
+    total_rows = 0
+
+    for pno in range(len(doc)):
+        page = doc.load_page(pno)
+
+        # 1) span（文字列＋bbox）を取得
+        text_dict = page.get_text("dict")
+        spans = []
+        for b in text_dict.get("blocks", []):
+            for l in b.get("lines", []):
+                for s in l.get("spans", []):
+                    t = (s.get("text") or "").strip()
+                    if not t:
+                        continue
+                    x0, y0, x1, y1 = s.get("bbox", [None, None, None, None])
+                    if None in (x0, y0, x1, y1):
+                        continue
+                    cx = (x0 + x1) / 2.0
+                    cy = (y0 + y1) / 2.0
+                    spans.append({
+                        "text": t,
+                        "bbox": [x0, y0, x1, y1],
+                        "center": [cx, cy],
+                        "size": s.get("size") or 10.0,
+                    })
+
+        # 2) 行クラスタ（Y近接）
+        spans_sorted = sorted(spans, key=lambda s: (s["center"][1], s["center"][0]))
+        sizes = [s["size"] for s in spans_sorted]
+        tol_y = (_median(sizes) or 10.0) * 0.6  # 文字サイズベースで動的しきい値
+
+        rows = []
+        current_row, last_y = [], None
+        for s in spans_sorted:
+            cy = s["center"][1]
+            if last_y is None or abs(cy - last_y) <= tol_y:
+                current_row.append(s)
+                last_y = cy if last_y is None else (last_y * 0.6 + cy * 0.4)  # 平滑化
+            else:
+                rows.append(current_row)
+                current_row = [s]
+                last_y = cy
+        if current_row:
+            rows.append(current_row)
+
+        # 3) 行内：X順に並べ、近接 span を結合してセル化
+        out_rows = []
+        for r in rows:
+            r_sorted = sorted(r, key=lambda s: s["center"][0])
+            merged, last = [], None
+            for s in r_sorted:
+                x0, y0, x1, y1 = s["bbox"]
+                if last is None:
+                    last = {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "text": s["text"], "size": s["size"]}
+                else:
+                    gap = x0 - last["x1"]
+                    fsz = s["size"]
+                    if gap < (fsz * 0.6):  # 近い→結合
+                        last["x1"] = max(last["x1"], x1)
+                        last["y0"] = min(last["y0"], y0)
+                        last["y1"] = max(last["y1"], y1)
+                        sep = "" if last["text"].endswith(("(", "/", "-", "・")) else " "
+                        last["text"] += ("" if s["text"].startswith((")", "/", "-", ",", "・")) else sep) + s["text"]
+                    else:
+                        merged.append(last)
+                        last = {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "text": s["text"], "size": s["size"]}
+            if last:
+                merged.append(last)
+            out_rows.append(merged)
+
+        # 4) 行を " | " 区切りで連結（列ルーラーの厳密化は将来対応）
+        for r in out_rows:
+            r_sorted = sorted(r, key=lambda c: (c["x0"] + c["x1"]) / 2.0)
+            line = " | ".join(c["text"] for c in r_sorted).strip()
+            if line:
+                all_lines.append(line)
+
+        total_rows += len(out_rows)
+        page_columns.append([])  # いったん空（拡張用）
+
+    joined = "\n".join(all_lines)
+    return {
+        "ok": True,
+        "pages": len(doc),
+        "rows": total_rows,
+        "tables_text": joined,
+        "suggested_columns": page_columns,
+    }
+
+# ---- Flask endpoint (JSON, Dify-friendly) ----
+@app.post("/extract_pdf_tables")
+def extract_pdf_tables():
+    """
+    multipart/form-data:
+      file: (required) PDF
+    return: JSON（/extract_mail を参考にした素朴な形）
+    """
+    up = request.files.get("file")
+    if not up:
+        return jsonify({"ok": False, "error": "file is required (multipart/form-data)"}), 400
+
+    fname = up.filename or "upload.pdf"
+    data = up.read() or b""
+    if not data:
+        return jsonify({"ok": False, "error": "empty file"}), 400
+
+    try:
+        result = _extract_pdf_to_tabletext_bytes(data)
+        if not result.get("ok"):
+            result["filename"] = fname
+            return jsonify(result), 500
+        result["filename"] = fname
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"extract_failed: {e}", "filename": fname}), 400

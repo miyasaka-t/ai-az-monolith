@@ -8,3 +8,4 @@ compressed-rtf>=1.0.6
 chardet>=5.2.0
 tzlocal>=5.2
 gunicorn>=22.0.0
+pymupdf>=1.24.0
