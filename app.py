@@ -1200,14 +1200,16 @@ def _handle_eml_bytes(b: bytes) -> Dict:
     return {"ok": True, "format": "eml", "body_text": body_text, "excel_attachments": excel_results}
 
 # ---- GitHub Raw などのURLから直接ダウンロードして保存（第4のファイル）
+
 @app.post("/api/upload-from-url")
 def api_upload_from_url():
     """
     JSON:
       {
-        "url": "https://raw.githubusercontent.com/<user>/<repo>/<ref>/<path/to/file>",
+        "url": "<GitHub Raw or Contents API URL or blob URL>",
         "folderId": "<OneDrive itemId>",
-        "fileName": "任意の保存名（省略可。省略時はURL末尾名を使用）"
+        "fileName": "任意の保存名（省略可）",
+        "githubToken": "Private repo用の個人アクセストークン（任意）"
       }
     成功: {"ok": true, "id": "...", "webUrl": "...", "name": "..."}
     """
@@ -1216,185 +1218,73 @@ def api_upload_from_url():
         url = (j.get("url") or j.get("href") or "").strip()
         folder_id = (j.get("folderId") or "").strip()
         name_ovr = (j.get("fileName") or "").strip()
+        gh_token = (j.get("githubToken") or "").strip()
 
         if not url or not folder_id:
-            return jsonify({"error": "missing url or folderId"}), 400
+            return jsonify({"ok": False, "error": "missing url or folderId"}), 400
 
-        r = requests.get(url, timeout=60)
-        r.raise_for_status()
+        # ---- GitHub URL を正規化（blob/raw → raw.githubusercontent.com）----
+        def _to_github_raw(u: str) -> str:
+            m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.*)", u)
+            if m:
+                o, r, ref, path = m.groups()
+                return f"https://raw.githubusercontent.com/{o}/{r}/{ref}/{path}"
+            m2 = re.match(r"https?://github\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.*)", u)
+            if m2:
+                o, r, ref, path = m2.groups()
+                return f"https://raw.githubusercontent.com/{o}/{r}/{ref}/{path}"
+            return u
+
+        norm_url = _to_github_raw(url)
+
+        # ---- リクエストヘッダ（Private対応）----
+        headers = {}
+        if gh_token:
+            headers["Authorization"] = f"token {gh_token}"
+            headers["Accept"] = "application/vnd.github.v3.raw"
+
+        # ---- 取得（リダイレクト追従）----
+        r = requests.get(norm_url, headers=headers, timeout=60, allow_redirects=True)
+
+        ct = (r.headers.get("Content-Type") or "").lower()
+        if r.status_code != 200 or "text/html" in ct:
+            # HTMLページを拾っている＝blob/認証/404の可能性
+            return jsonify({
+                "ok": False,
+                "error": "download_http_error",
+                "status": r.status_code,
+                "detail": (r.text or "")[:1000]
+            }), 400
+
         data = r.content
-        mime = (r.headers.get("Content-Type") or
-                mimetypes.guess_type(url)[0] or
-                "application/octet-stream")
+        mime = r.headers.get("Content-Type") or mimetypes.guess_type(norm_url)[0] or "application/octet-stream"
 
         if not name_ovr:
             from urllib.parse import urlparse, unquote
-            path = unquote(urlparse(url).path or "")
+            path = unquote(urlparse(norm_url).path or "")
             base = (path.rsplit("/", 1)[-1] or "download.bin")
             name_ovr = base
 
+        # ---- OneDrive へアップロード（小/大ファイル振り分け）----
         if len(data) <= SMALL_MAX_BYTES:
             up = graph_put_small_to_folder_org(folder_id, name_ovr, mime, data)
         else:
             up = graph_put_chunked_to_folder_org(folder_id, name_ovr, data)
 
-        if up.status_code in (200, 201):
+        if getattr(up, "status_code", 500) in (200, 201):
             jj = up.json()
-            return jsonify({
-                "ok": True,
-                "id": jj.get("id"),
-                "webUrl": jj.get("webUrl"),
-                "name": jj.get("name")
-            })
-        else:
-            return jsonify({
-                "error": "graph_upload_failed",
-                "status": up.status_code,
-                "detail": up.text[:4000]
-            }), up.status_code
+            return jsonify({"ok": True, "id": jj.get("id"), "webUrl": jj.get("webUrl"), "name": jj.get("name")})
 
-    except requests.HTTPError as e:
-        return jsonify({
-            "error": "download_http_error",
-            "status": getattr(e.response, "status_code", None),
-            "detail": getattr(e.response, "text", "")[:4000]
-        }), 502
+        # OneDrive側のエラーレスポンスをそのまま返して切り分けやすく
+        status = getattr(up, "status_code", 502)
+        body = getattr(up, "text", "")[:4000]
+        return jsonify({"ok": False, "error": "graph_upload_failed", "status": status, "detail": body}), status
+
+    except requests.Timeout:
+        return jsonify({"ok": False, "error": "timeout"}), 504
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": False, "error": f"server_error:{e.__class__.__name__}", "detail": str(e)}), 502
 
-
-# ===============================
-# メイン
-# ===============================
-# ========= PDF → table text extractor (PyMuPDF) =========
-# Requirements:
-#   pip install pymupdf
-# Usage:
-#   1) app.py で Flask を使っている前提（from flask import Flask などで app が存在）
-#   2) このブロックを app.py に追記
-#   3) POST /extract_pdf_tables に multipart/form-data で file=PDF を投げる
-#
-# 出力は /extract_mail と同じノリの JSON（※日本語はエスケープしないUTF-8で返却）:
-# {
-#   "ok": true,
-#   "filename": "xxx.pdf",
-#   "pages": 2,
-#   "rows": 340,
-#   "tables_text": "項番 | 在籍期間 | ...\n1 | 2009/7～2011/8 | ...\n...",
-#   "suggested_columns": [[...], ...]  # 今は未使用/将来拡張用
-# }
-
-from flask import request, jsonify, Response
-import json
-
-def _median(vals):
-    try:
-        import statistics
-        return statistics.median(vals) if vals else None
-    except Exception:
-        return None
-
-def _extract_pdf_to_tabletext_bytes(pdf_bytes: bytes) -> dict:
-    try:
-        import fitz  # PyMuPDF
-    except Exception as e:
-        return {"ok": False, "error": f"pymupdf_not_available: {e}"}
-
-    import io
-    doc = fitz.open(stream=io.BytesIO(pdf_bytes).getvalue(), filetype="pdf")
-
-    all_lines = []          # 最終的に LLM に渡す "表テキスト" の行
-    page_columns = []       # 将来用（列ルーラーのヒント）
-    total_rows = 0
-
-    for pno in range(len(doc)):
-        page = doc.load_page(pno)
-
-        # 1) span（文字列＋bbox）を取得
-        text_dict = page.get_text("dict")
-        spans = []
-        for b in text_dict.get("blocks", []):
-            for l in b.get("lines", []):
-                for s in l.get("spans", []):
-                    t = (s.get("text") or "").strip()
-                    if not t:
-                        continue
-                    x0, y0, x1, y1 = s.get("bbox", [None, None, None, None])
-                    if None in (x0, y0, x1, y1):
-                        continue
-                    cx = (x0 + x1) / 2.0
-                    cy = (y0 + y1) / 2.0
-                    spans.append({
-                        "text": t,
-                        "bbox": [x0, y0, x1, y1],
-                        "center": [cx, cy],
-                        "size": s.get("size") or 10.0,
-                    })
-
-        # 2) 行クラスタ（Y近接）
-        spans_sorted = sorted(spans, key=lambda s: (s["center"][1], s["center"][0]))
-        sizes = [s["size"] for s in spans_sorted]
-        tol_y = (_median(sizes) or 10.0) * 0.6  # 文字サイズベースで動的しきい値
-
-        rows = []
-        current_row, last_y = [], None
-        for s in spans_sorted:
-            cy = s["center"][1]
-            if last_y is None or abs(cy - last_y) <= tol_y:
-                current_row.append(s)
-                last_y = cy if last_y is None else (last_y * 0.6 + cy * 0.4)  # 平滑化
-            else:
-                rows.append(current_row)
-                current_row = [s]
-                last_y = cy
-        if current_row:
-            rows.append(current_row)
-
-        # 3) 行内：X順に並べ、近接 span を結合してセル化
-        out_rows = []
-        for r in rows:
-            r_sorted = sorted(r, key=lambda s: s["center"][0])
-            merged, last = [], None
-            for s in r_sorted:
-                x0, y0, x1, y1 = s["bbox"]
-                if last is None:
-                    last = {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "text": s["text"], "size": s["size"]}
-                else:
-                    gap = x0 - last["x1"]
-                    fsz = s["size"]
-                    if gap < (fsz * 0.6):  # 近い→結合
-                        last["x1"] = max(last["x1"], x1)
-                        last["y0"] = min(last["y0"], y0)
-                        last["y1"] = max(last["y1"], y1)
-                        sep = "" if last["text"].endswith(("(", "/", "-", "・")) else " "
-                        last["text"] += ("" if s["text"].startswith((")", "/", "-", ",", "・")) else sep) + s["text"]
-                    else:
-                        merged.append(last)
-                        last = {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "text": s["text"], "size": s["size"]}
-            if last:
-                merged.append(last)
-            out_rows.append(merged)
-
-        # 4) 行を " | " 区切りで連結（列ルーラーの厳密化は将来対応）
-        for r in out_rows:
-            r_sorted = sorted(r, key=lambda c: (c["x0"] + c["x1"]) / 2.0)
-            line = " | ".join(c["text"] for c in r_sorted).strip()
-            if line:
-                all_lines.append(line)
-
-        total_rows += len(out_rows)
-        page_columns.append([])  # いったん空（拡張用）
-
-    joined = "\n".join(all_lines)
-    return {
-        "ok": True,
-        "pages": len(doc),
-        "rows": total_rows,
-        "tables_text": joined,
-        "suggested_columns": page_columns,
-    }
-
-# ---- Flask endpoint (JSON, Dify-friendly, 日本語エスケープしない) ----
 @app.post("/extract_pdf_tables")
 def extract_pdf_tables():
     """
