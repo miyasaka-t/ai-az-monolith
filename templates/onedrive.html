@@ -165,7 +165,7 @@ const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
 // ===== フォルダピッカー（既存） =====
 let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
 
-function openPicker(){ pickedFolderId=null;pickedFolderName=null;$("pickerOk").disabled=true;$("picker").style.display="flex";historyStack=[];breadcrumb=[{id:"root",name:"ルート"}];loadFolder("root",false,"open");}
+function openPicker(){ pickedFolderId=null;pickedFolderName=null;$("pickerOk").disabled=true;$("picker").style.display="flex";historyStack=[];breadcrumb=[{id:"root",name:"ルート"}];loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");}
 function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id,pushHistory=true,from="enter"){
