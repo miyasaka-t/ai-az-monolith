@@ -53,6 +53,14 @@
 
   /* 強制付与ヒントをUIから隠す（既存維持） */
   #nm_eml_hint, #nm_xlsx_hint { display: none !important; }
+
+  /* フォルダ検索バー */
+  .picker-search{display:none;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);background:#f9fafb}
+  .picker-search.show{display:flex}
+  #folderSearch{flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+  .search-hint{font-size:12px;color:var(--muted)}
+  mark{background:#ffe58f;border-radius:4px;padding:0 2px}
+
 </style>
 
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
@@ -87,13 +95,15 @@
     <div class="picker-head">
       <div class="picker-title">保存先を選択</div>
       <div class="picker-toolbar">
+        <button id="btnSearchToggle">🔎 検索 (Ctrl+F)</button>
         <button id="btnBack">← 戻る</button>
         <button id="btnUp">↑ 親へ</button>
         <button id="btnNewFolder">＋ 新規フォルダ</button>
         <button id="btnReload">⟳ 更新</button>
       </div>
     </div>
-    <div class="picker-breadcrumb" id="crumbs"></div>
+    <div class="picker-search" id="pickerSearchBar">  <input id="folderSearch" type="text" placeholder="フォルダ名を検索（現在の階層内）" aria-label="フォルダ名を検索">  <button id="btnSearchClear" title="クリア">✕</button>  <div class="search-hint">Enterで決定、Escで閉じる</div></div>
+<div class="picker-breadcrumb" id="crumbs"></div>
     <div class="picker-body">
       <div class="th"><div>名前</div><div style="text-align:right">操作</div></div>
       <div id="list" class="list"></div>
@@ -152,6 +162,83 @@ const GITHUB_SAVE_NAME = "印刷_プロパティーマクロ.xlsm";
   $("nm_xlsx_hint").textContent = "保存時は「" + $("xlsxBase").value + " + 添付の拡張子」を強制付与";
 })();
 
+
+// ===== フォルダ検索（Ctrl+F風） =====
+let lastFolders = [];           // 直近に読み込んだフォルダ一覧
+let filterWord = "";            // 現在の検索語
+
+const searchBar = $("pickerSearchBar");
+const searchInput = $("folderSearch");
+const btnSearchToggle = $("btnSearchToggle");
+const btnSearchClear  = $("btnSearchClear");
+
+function toggleSearchBar(show){
+  if (typeof show === "boolean") {
+    searchBar.classList.toggle("show", show);
+  } else {
+    searchBar.classList.toggle("show");
+  }
+  if (searchBar.classList.contains("show")) {
+    setTimeout(()=>searchInput.focus(), 0);
+  } else {
+    filterWord = "";
+    searchInput.value = "";
+    renderList(lastFolders || []);
+  }
+}
+
+// 文字列エスケープ（XSS対策）
+function escHtml(s){
+  return (s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+// ハイライト付与
+function highlight(text, q){
+  if (!q) return escHtml(text);
+  try{
+    const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(esc, "ig");
+    return escHtml(text).replace(re, m => `<mark>${escHtml(m)}</mark>`);
+  }catch(e){
+    return escHtml(text);
+  }
+}
+
+// Ctrl+F で検索バーを開く
+document.addEventListener("keydown", (ev)=>{
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
+    ev.preventDefault();
+    toggleSearchBar(true);
+  } else if (ev.key === "Escape" && searchBar.classList.contains("show")) {
+    ev.preventDefault();
+    toggleSearchBar(false);
+  }
+});
+
+btnSearchToggle.onclick = ()=> toggleSearchBar();
+btnSearchClear.onclick  = ()=> { searchInput.value=""; filterWord=""; renderList(lastFolders||[]); searchInput.focus(); };
+
+// 入力でフィルタリング（デバウンス）
+let _searchTimer = null;
+searchInput.addEventListener("input", ()=>{
+  filterWord = searchInput.value.trim();
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(()=> renderList(lastFolders||[]), 100);
+});
+
+// Enterで確定（特に処理は不要だが、最初の候補を選択状態にする）
+searchInput.addEventListener("keydown", (ev)=>{
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    // 最初の行を選択
+    const first = document.querySelector("#list .tr .rowbox");
+    if (first) first.click();
+  } else if (ev.key === "Escape") {
+    ev.preventDefault();
+    toggleSearchBar(false);
+  }
+});
+
 // ===== フォルダピッカー =====
 let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
 let selectedRowEl = null;
@@ -173,7 +260,8 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     const j=await r.json();
     if(!r.ok) throw new Error(j.error||r.statusText);
     if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
-    currentId=id||"root"; updateBreadcrumb(j.parent,id); renderList(j.folders||[]);
+    currentId=id||"root"; updateBreadcrumb(j.parent,id); lastFolders = j.folders || [];
+    renderList(lastFolders);
     $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")||"/";
   }catch(e){ log("❌ folder load: "+e.message); }
 }
@@ -190,10 +278,16 @@ function updateBreadcrumb(parentMeta,id){
 }
 function renderList(folders){
   const list=$("list");
-  if(!folders.length){ list.innerHTML="<div style='padding:10px'>（空）</div>"; return; }
-  folders.forEach(f=>{
+  let arr = folders || [];
+  if (filterWord) {
+    const q = filterWord.toLowerCase();
+    arr = arr.filter(x => (x.name||"").toLowerCase().includes(q));
+  }
+  if(!arr.length){ list.innerHTML="<div style='padding:10px'>（該当なし）</div>"; return; }
+  list.innerHTML="";
+  arr.forEach(f=>{
     const row=document.createElement("div"); row.className="tr";
-    const left=document.createElement("div"); left.className="rowbox name"; left.textContent="📁 "+f.name;
+    const left=document.createElement("div"); left.className="rowbox name"; left.innerHTML="📁 " + highlight(f.name, filterWord);
     // クリックで選択
     left.onclick=()=>{
       if(selectedRowEl) selectedRowEl.classList.remove("selected");
