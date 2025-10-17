@@ -239,35 +239,64 @@ searchInput.addEventListener("keydown", (ev)=>{
   }
 });
 
+
+// ===== パンくず & パス描画ユーティリティ =====
+function renderCurrentPath(){
+  // 先頭は常に "/" で、選択フォルダ名は足さない（現在地のみ）
+  const names = breadcrumb.map(c=>c.name);
+  const joined = names.join("/");
+  const path = (joined.startsWith("/") ? joined : ("/" + joined.replace(/^ルート\/?/, ""))).replace(/\/+/g,"/");
+  $("currentPath").textContent = path === "/ルート" ? "/" : ("/" + breadcrumb.slice(1).map(c=>c.name).join("/"));
+}
+
+function renderBreadcrumb(){
+  const el = $("crumbs");
+  el.innerHTML = "";
+  breadcrumb.forEach((c,idx)=>{
+    const s=document.createElement("span");
+    s.className="crumb";
+    s.textContent = c.name;
+    s.onclick = ()=>{
+      if(idx < breadcrumb.length-1){
+        breadcrumb = breadcrumb.slice(0, idx+1);
+        loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
+      }
+    };
+    el.appendChild(s);
+  });
+}
+
 // ===== フォルダピッカー =====
 let pickedFolderId=null,pickedFolderName=null,currentId="root",historyStack=[],breadcrumb=[{id:"root",name:"ルート"}];
 let selectedRowEl = null;
 
 function openPicker(){
   pickedFolderId=null; pickedFolderName=null;
-  $("pickerSave").disabled=true;
+  $("pickerSave").disabled=false;
   $("picker").style.display="flex";
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
+  renderBreadcrumb(); renderCurrentPath();
   loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
 }
 function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id,pushHistory=true,from="enter"){
-  $("list").innerHTML=""; $("pickerSave").disabled=true;
+  $("list").innerHTML=""; $("pickerSave").disabled=false;
   selectedRowEl = null;
+  // 階層移動時は検索語クリア（reload時のみ維持）
+  if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; }
+
   try{
     const r=await fetch(EP_LIST_FOLDERS+"?parentId="+encodeURIComponent(id||"root"));
     const j=await r.json();
     if(!r.ok) throw new Error(j.error||r.statusText);
     if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
-    currentId=id||"root"; updateBreadcrumb(j.parent,id); lastFolders = j.folders || [];
+    currentId=id||"root"; /* breadcrumb stays as-is; no parent push */ renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
     renderList(lastFolders);
-    $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")||"/";
+    renderCurrentPath();
   }catch(e){ log("❌ folder load: "+e.message); }
 }
-function updateBreadcrumb(parentMeta,id){
-  if((id||"root")==="root") breadcrumb=[{id:"root",name:"ルート"}];
-  else { breadcrumb.push({id,name:(parentMeta&&parentMeta.name)||"(不明)"}); }
+/* updateBreadcrumb deprecated: breadcrumb managed explicitly */
   $("crumbs").innerHTML="";
   breadcrumb.forEach((c,i)=>{
     const s=document.createElement("span");
@@ -275,7 +304,7 @@ function updateBreadcrumb(parentMeta,id){
     s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
     $("crumbs").appendChild(s);
   });
-}
+  
 function renderList(folders){
   const list=$("list");
   let arr = folders || [];
@@ -296,7 +325,7 @@ function renderList(folders){
       pickedFolderId = f.id;
       pickedFolderName = f.name;
       $("pickerSave").disabled=false;
-      $("currentPath").textContent=breadcrumb.map(c=>c.name).join("/")+"/"+f.name;
+      renderCurrentPath();
     };
     // ✅ ダブルクリックで開く（修正済み）
     left.ondblclick = () => enterFolder(f.id,f.name);
@@ -310,7 +339,7 @@ function renderList(folders){
     list.appendChild(row);
   });
 }
-function enterFolder(id,name){ breadcrumb.push({id,name}); loadFolder(id,true,"enter"); }
+function enterFolder(id,name){ breadcrumb.push({id,name}); renderBreadcrumb(); renderCurrentPath(); loadFolder(id,true,"enter"); }
 
 async function deleteFolder(id,name){
   if(!confirm(`「${name}」を削除します。よろしいですか？`)) return;
@@ -390,7 +419,10 @@ async function uploadFromUrl(url, folderId, fileName){
 
 // ===== 3つすべて保存（来ているチケットは全部） + 4つ目のGitHub保存 =====
 async function doUpload(){
-  if(!pickedFolderId){ alert("保存先フォルダを選んでください"); return; }
+  // 保存先: 選択があれば選択先、なければ現在のフォルダ
+  const targetFolderId = pickedFolderId || currentId || "root";
+  const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
+  $("pickedHint").textContent = "保存先: " + targetFolderName;
 
   // 入力されたベース名
   const emlBase  = ($("emlBase").value  || "Report").trim();
@@ -474,7 +506,7 @@ async function doUpload(){
 // ピッカー操作
 $("openPicker").onclick=openPicker;
 $("pickerSave").onclick=async ()=>{
-  if(!pickedFolderId){ return; }
+  // 選択がなくても現在地に保存する
   closePicker();
   await doUpload(); // ピッカー内の「保存」で即アップロード
 };
