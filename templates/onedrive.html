@@ -257,7 +257,7 @@ function renderCurrentPath(){
 }
 
 function renderBreadcrumb(){
-  const btnH=document.getElementById("btnHome"); if(btnH){ btnH.disabled=(breadcrumb.length<=1); }
+  const btnH=document.getElementById("btnHome"); if(btnH){ btnH.disabled = (!currentId || currentId==="root"); }
   const el = $("crumbs");
   el.innerHTML = "";
   breadcrumb.forEach((c,idx)=>{
