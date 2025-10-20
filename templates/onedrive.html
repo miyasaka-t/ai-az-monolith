@@ -26,7 +26,7 @@
   .picker-title{font-weight:700;margin-right:auto}
   .picker-toolbar{display:flex;gap:6px}
   .picker-body{padding:0;max-height:60vh;overflow:auto}
-  .picker-breadcrumb{ display:none !important; }
+  .picker-breadcrumb{display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid var(--line);background:#fafafa}
   .crumb{color:#2563eb;cursor:pointer}
   .crumb::after{content:"›";margin:0 4px;color:#9ca3af}
   .crumb:last-child{font-weight:700;color:var(--fg)}
@@ -62,10 +62,9 @@
   mark{background:#ffe58f;border-radius:4px;padding:0 2px}
 
 
-/* force-hide current path */
-#currentPath{ display:none !important; }
-
-/* keep footer actions at bottom-right */
+/* --- additions (Home button & layout fixes) --- */
+.picker-breadcrumb{ display:none !important; } /* visually hide breadcrumb */
+#currentPath{ display:none !important; }       /* hide footer path */
 .picker-foot{ justify-content:flex-end !important; }
 .picker-foot > div{ display:flex; gap:8px; }
 </style>
@@ -102,6 +101,7 @@
     <div class="picker-head">
       <div class="picker-title">保存先を選択</div>
       <div class="picker-toolbar">
+        <button id="btnHome" aria-label="ルートへ">🏠 ルート</button>
         <button id="btnSearchToggle">🔎 検索</button>
         <button id="btnBack">← 戻る</button>
         <button id="btnUp">↑ 親へ</button>
@@ -257,6 +257,7 @@ function renderCurrentPath(){
 }
 
 function renderBreadcrumb(){
+  const btnH=document.getElementById("btnHome"); if(btnH){ btnH.disabled=(breadcrumb.length<=1); }
   const el = $("crumbs");
   el.innerHTML = "";
   breadcrumb.forEach((c,idx)=>{
@@ -517,4 +518,12 @@ $("pickerSave").onclick=async ()=>{
   closePicker();
   await doUpload(); // ピッカー内の「保存」で即アップロード
 };
+function goToRoot(){
+  try{
+    historyStack = [];
+    breadcrumb = [{id:"root", name:"ルート"}];
+    loadFolder("root", true, "home");
+  }catch(e){ log("❌ goToRoot: " + e.message); }
+}
+try{ document.getElementById("btnHome").onclick = goToRoot; }catch(e){}
 </script>
