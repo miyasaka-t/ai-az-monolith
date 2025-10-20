@@ -49,7 +49,7 @@
   .vertical{flex-direction:column;align-items:flex-start;gap:8px}
 
   /* 親へボタン非表示（既存維持） */
-  #btnUp { display: none !important; }
+  /* btnUp visible: removed forced hiding */
 
   /* 強制付与ヒントをUIから隠す（既存維持） */
   #nm_eml_hint, #nm_xlsx_hint { display: none !important; }
@@ -119,6 +119,57 @@
 </div>
 
 <script>
+
+// === Breadcrumb helpers (revived) ===
+async function buildBreadcrumbToTop(currentId, topId=null){
+  const chain=[];
+  let id = currentId;
+  const seen = new Set();
+  // Safety cap to prevent infinite loops
+  for(let i=0;i<32 && id && !seen.has(id);i++){
+    seen.add(id);
+    // fetch meta of this id (as 'parent' field)
+    const r = await fetch(EP_LIST_FOLDERS + "?parentId=" + encodeURIComponent(id));
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || r.statusText);
+    const meta = j.parent; // {id, name, parentId} for 'id'
+    if(!meta){ break; }
+    chain.push({ id: meta.id, name: meta.name || "(no name)" });
+    id = meta.parentId;
+    if(topId && id === topId){ break; }
+    if(!id || id === "root"){ break; }
+  }
+  // Add synthetic root / top label
+  if(topId && id === topId){
+    chain.push({ id: topId, name: "TOP" });
+  }else{
+    chain.push({ id: "root", name: "ルート" });
+  }
+  chain.reverse();
+  return chain;
+}
+
+function renderBreadcrumb(){
+  const el = $("crumbs");
+  if(!el) return;
+  el.innerHTML = "";
+  breadcrumb.forEach((c, idx) => {
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = c.name || "(no name)";
+    a.onclick = (e)=>{ e.preventDefault(); if(idx===breadcrumb.length-1) return; loadFolder(c.id, true, "crumb"); };
+    el.appendChild(a);
+    if(idx < breadcrumb.length-1){
+      const sep = document.createElement("span");
+      sep.textContent = " > ";
+      el.appendChild(sep);
+    }
+  });
+  // Up button enable/disable
+  const up = $("btnUp");
+  if(up){ up.disabled = (breadcrumb.length<=1); }
+}
+
 const $ = (id)=>document.getElementById(id);
 const log = (m)=>{ $("log").textContent += m + "\n"; };
 
@@ -280,11 +331,15 @@ function openPicker(){
 }
 function closePicker(){ $("picker").style.display="none"; }
 
-async function loadFolder(id,pushHistory=true,from="enter"){
+async function loadFolder(id, pushHistory=true, from="ui") {
+
   $("list").innerHTML=""; $("pickerSave").disabled=false;
   selectedRowEl = null;
   // 階層移動時は検索語クリア（reload時のみ維持）
-  if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; }
+  if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; 
+  renderBreadcrumb();
+
+}
 
   try{
     const r=await fetch(EP_LIST_FOLDERS+"?parentId="+encodeURIComponent(id||"root"));
