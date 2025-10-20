@@ -276,7 +276,18 @@ function openPicker(){
   $("picker").style.display="flex";
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
-  loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
+  // 初期フォルダ（テスト用）をパンくずに反映
+  (async ()=>{
+    try {
+      const metaRes = await fetch("/api/drive/item?id=01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK");
+      const meta = await metaRes.json().catch(()=>({}));
+      const startName = meta && meta.name ? meta.name : "開始フォルダ";
+      breadcrumb = [{id:"root",name:"ルート"}, {id:"01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", name: startName}];
+      renderBreadcrumb(); renderCurrentPath();
+    } catch(_) { /* ignore */ }
+    await loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
+  })();
+
 }
 function closePicker(){ $("picker").style.display="none"; }
 
@@ -290,55 +301,13 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     const r=await fetch(EP_LIST_FOLDERS+"?parentId="+encodeURIComponent(id||"root"));
     const j=await r.json();
     if(!r.ok) throw new Error(j.error||r.statusText);
-    if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
+    if(pushHistory&&currentId&&from!=="back") historyStack.push({ id: currentId, breadcrumb: structuredClone(breadcrumb) });
     currentId=id||"root"; /* breadcrumb stays as-is; no parent push */ renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
     renderList(lastFolders);
     renderCurrentPath();
   }catch(e){ log("❌ folder load: "+e.message); }
 }
-/* updateBreadcrumb deprecated: breadcrumb managed explicitly */
-  $("crumbs").innerHTML="";
-  breadcrumb.forEach((c,i)=>{
-    const s=document.createElement("span");
-    s.className="crumb"; s.textContent=c.name;
-    s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
-    $("crumbs").appendChild(s);
-  });
-  
-function renderList(folders){
-  const list=$("list");
-  let arr = folders || [];
-  if (filterWord) {
-    const q = filterWord.toLowerCase();
-    arr = arr.filter(x => (x.name||"").toLowerCase().includes(q));
-  }
-  if(!arr.length){ list.innerHTML="<div style='padding:10px'>（該当なし）</div>"; return; }
-  list.innerHTML="";
-  arr.forEach(f=>{
-    const row=document.createElement("div"); row.className="tr";
-    const left=document.createElement("div"); left.className="rowbox name"; left.innerHTML="📁 " + highlight(f.name, filterWord);
-    // クリックで選択
-    left.onclick=()=>{
-      if(selectedRowEl) selectedRowEl.classList.remove("selected");
-      left.classList.add("selected");
-      selectedRowEl = left;
-      pickedFolderId = f.id;
-      pickedFolderName = f.name;
-      $("pickerSave").disabled=false;
-      renderCurrentPath();
-    };
-    // ✅ ダブルクリックで開く（修正済み）
-    left.ondblclick = () => enterFolder(f.id,f.name);
-
-    const right=document.createElement("div"); right.className="act";
-    const bOpen=document.createElement("button"); bOpen.textContent="開く"; bOpen.onclick=()=>enterFolder(f.id,f.name);
-    const bDel=document.createElement("button"); bDel.textContent="削除"; bDel.onclick=()=>deleteFolder(f.id,f.name);
-    right.appendChild(bOpen); right.appendChild(bDel);
-
-    row.appendChild(left); row.appendChild(right);
-    list.appendChild(row);
-  });
-}
+/* deprecated breadcrumb block removed */
 function enterFolder(id,name){ breadcrumb.push({id,name}); renderBreadcrumb(); renderCurrentPath(); loadFolder(id,true,"enter"); }
 
 async function deleteFolder(id,name){
@@ -354,7 +323,7 @@ async function deleteFolder(id,name){
   }
 }
 
-$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); loadFolder(prev,false,"back"); };
+$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); breadcrumb = prev.breadcrumb || [{id:"root",name:"ルート"}]; renderBreadcrumb(); renderCurrentPath(); loadFolder(prev.id,false,"back"); };
 $("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
 $("btnReload").onclick=()=>loadFolder(currentId,false,"reload");
 
