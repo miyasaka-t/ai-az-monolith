@@ -97,7 +97,7 @@
       <div class="picker-toolbar">
         <button id="btnSearchToggle">🔎 検索</button>
         <button id="btnBack">← 戻る</button>
-        <button id="btnUp" /> <button id="btnJumpTest" title="テストへ移動 (Alt+T)">🧪 テストへ</button> <!-- inserted -->>↑ 親へ</button>
+        <button id="btnUp">↑ 親へ</button>
         <button id="btnNewFolder">＋ 新規フォルダ</button>
         <button id="btnReload">⟳ 更新</button>
       </div>
@@ -510,42 +510,4 @@ $("pickerSave").onclick=async ()=>{
   closePicker();
   await doUpload(); // ピッカー内の「保存」で即アップロード
 };
-
-// === Test Folder Jump ===
-const TEST_SHARED_URL = "https://cvcf01-my.sharepoint.com/:f:/g/personal/sups_cvcf01_onmicrosoft_com/En8ACHXmOPRMgksBuYYBVkYBmoy5-EPu7E_7eY2raV8OCQ?e=Oc1nLn";
-const EP_RESOLVE_SHARE = "/api/drive/resolve-share";
-
-async function resolveShareToId(urlOrToken){
-  const r = await fetch(EP_RESOLVE_SHARE + "?url=" + encodeURIComponent(urlOrToken));
-  const j = await r.json();
-  if(!r.ok || !j.ok) throw new Error((j && (j.error||j.detail)) || r.statusText);
-  return j.id;
-}
-
-document.addEventListener("keydown", (e)=>{
-  if(e.altKey && (e.key === "t" || e.key === "T")){
-    const b = document.getElementById("btnJumpTest");
-    if(b){ b.click(); }
-  }
-});
-
-document.addEventListener("DOMContentLoaded", ()=>{
-  const b = document.getElementById("btnJumpTest");
-  if(b){
-    b.addEventListener("click", async ()=>{
-      try{
-        b.disabled = true;
-        // Resolve shared URL to driveItem id, then jump
-        const id = await resolveShareToId(TEST_SHARED_URL);
-        await loadFolder(id, true, "test");
-        log("🧪 テストフォルダへ移動しました");
-      }catch(err){
-        log("❌ テストフォルダ解決に失敗: " + (err.message||err));
-        alert("テストフォルダに移動できませんでした。共有リンクの有効期限や権限を確認してください。");
-      }finally{
-        b.disabled = false;
-      }
-    });
-  }
-});
 </script>

@@ -1421,38 +1421,3 @@ def extract_pdf_tables():
     except Exception as e:
         payload = {"ok": False, "error": f"extract_failed: {e}", "filename": fname}
         return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
-
-
-
-# === Resolve OneDrive share URL to driveItem id ===
-def graph_resolve_share(url_or_id: str):
-    """Accepts a full sharing URL or pre-encoded 'u!<shareId>' token, returns {id,name,webUrl}."""
-    import base64
-    u = (url_or_id or "").strip()
-    if not u:
-        raise ValueError("empty_url")
-    if u.startswith("u!"):
-        token = u
-    else:
-        # Base64 URL-safe encode, trim '=' padding per Graph spec
-        b = base64.urlsafe_b64encode(u.encode("utf-8")).decode("ascii").rstrip("=")
-        token = "u!" + b
-    url = f"{GRAPH_BASE}/shares/{token}/driveItem?$select=id,name,webUrl"
-    r = graph_get(url, None)  # uses bearer from graph_get
-    if r.status_code != 200:
-        raise requests.HTTPError(response=r)
-    j = r.json() or {}
-    return {"id": j.get("id"), "name": j.get("name"), "webUrl": j.get("webUrl")}
-
-@app.get("/api/drive/resolve-share")
-def api_resolve_share():
-    try:
-        u = request.args.get("url","").strip()
-        if not u:
-            return jsonify({"error":"missing_url"}), 400
-        info = graph_resolve_share(u)
-        return jsonify({"ok": True, **info})
-    except requests.HTTPError as e:
-        return jsonify({"error":"graph_http_error", "status": e.response.status_code, "detail": e.response.text}), 502
-    except Exception as e:
-        return jsonify({"error":"resolve_failed", "detail": str(e)}), 400
