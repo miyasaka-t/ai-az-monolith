@@ -120,7 +120,48 @@
 
 <script>
 
-// === Breadcrumb helpers (revived) ===
+
+// === Meta & Breadcrumb (robust) ===
+async function fetchItemMeta(id){
+  if(!id) return null;
+  const r = await fetch(EP_LIST_FOLDERS + "?parentId=" + encodeURIComponent(id));
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.error||r.statusText);
+  return j.parent || null; // {id,name,parentId} for given id
+}
+
+async function buildBreadcrumbFrom(id){
+  const chain=[];
+  let cur=id;
+  const seen=new Set();
+  for(let i=0;i<64 && cur && !seen.has(cur);i++){
+    seen.add(cur);
+    const meta = await fetchItemMeta(cur);
+    if(!meta) break;
+    chain.push({ id: meta.id, name: meta.name || "(no name)"});
+    cur = meta.parentId; // go up
+  }
+  chain.reverse();
+  // Ensure we have a visible top. If the first isn't root-ish, prepend synthetic root label.
+  if(chain.length===0 || chain[0].id !== "root"){
+    chain.unshift({ id:"root", name:"ルート"});
+  }
+  return chain;
+}
+
+function renderBreadcrumb(){
+  const el=$("crumbs"); if(!el) return;
+  el.innerHTML="";
+  breadcrumb.forEach((c,idx)=>{
+    const a=document.createElement("a");
+    a.href="#"; a.textContent=c.name||"(no name)";
+    a.onclick=(e)=>{ e.preventDefault(); if(idx===breadcrumb.length-1) return; loadFolder(c.id,true,"crumb"); };
+    el.appendChild(a);
+    if(idx<breadcrumb.length-1){ const s=document.createElement("span"); s.textContent=" > "; el.appendChild(s); }
+  });
+  const up=$("btnUp"); if(up){ up.disabled = (breadcrumb.length<=1); }
+}
+
 async function buildBreadcrumbToTop(currentId, topId=null){
   const chain=[];
   let id = currentId;
@@ -333,11 +374,18 @@ function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id, pushHistory=true, from="ui") {
 
+
   $("list").innerHTML=""; $("pickerSave").disabled=false;
   selectedRowEl = null;
   // 階層移動時は検索語クリア（reload時のみ維持）
   if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; 
   renderBreadcrumb();
+
+
+    try{
+      breadcrumb = await buildBreadcrumbFrom(currentId);
+    }catch(e){ console.warn("breadcrumb build failed", e); breadcrumb=[{id:"root",name:"ルート"}]; }
+    renderBreadcrumb();
 
 }
 
