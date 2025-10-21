@@ -124,16 +124,30 @@ def graph_get_item_meta(item_id):
     return r.json()
 
 def graph_list_child_folders(parent_id: str):
+    """
+    OneDriveの指定フォルダ配下のフォルダ一覧をすべて取得する
+    （@odata.nextLink を追跡して全ページ取得）
+    """
     if not parent_id or parent_id == "root":
         url = f"{GRAPH_BASE}/users/{TARGET_USER_ID}/drive/root/children?$select=id,name,folder&$top=200"
     else:
         url = f"{GRAPH_BASE}/users/{TARGET_USER_ID}/drive/items/{parent_id}/children?$select=id,name,folder&$top=200"
-    r = requests.get(url, headers=_auth_headers(), timeout=30)
-    r.raise_for_status()
+
     arr = []
-    for it in r.json().get("value", []):
-        if isinstance(it.get("folder"), dict):
-            arr.append({"id": it.get("id"), "name": it.get("name")})
+
+    while url:
+        r = requests.get(url, headers=_auth_headers(), timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        # フォルダのみ抽出
+        for it in data.get("value", []):
+            if isinstance(it.get("folder"), dict):
+                arr.append({"id": it.get("id"), "name": it.get("name")})
+
+        # 次ページがあれば追跡
+        url = data.get("@odata.nextLink")
+
     return arr
 
 def graph_get_item_parent(item_id: str):
