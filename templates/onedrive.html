@@ -133,8 +133,11 @@ const log = (m)=>{ $("log").textContent += m + "\n"; };
 const q = new URLSearchParams(location.search);
 const T_EML   = q.get("ticket_eml")   || "";
 const T_XLSX  = q.get("ticket_xlsx")  || "";
+const T_FILE  = q.get("ticket_file")  || "";
 const T_MSG   = q.get("ticket_msg")   || "";
 const TICKET_SINGLE = q.get("ticket") || "";
+const ALL_ATTACH = (q.get("all_attachments") || "0") === "1";
+const KINDS = (q.get("kinds") || "").toLowerCase();
 
 // ベース名初期値
 const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
@@ -438,9 +441,13 @@ async function doUpload(){
   const emlName = emlBase.toLowerCase().endsWith(".eml") ? emlBase : (emlBase + ".eml");
 
   // 3点：EML / MSG / (MSG→)XLSX を全保存（来ているものは全部）
-  const want_eml  = Boolean(T_EML || TICKET_SINGLE);
-  const want_msg  = Boolean(T_MSG);
-  const want_xlsx = Boolean(T_MSG || T_XLSX);
+  const want_eml   = Boolean(T_EML || TICKET_SINGLE);
+const want_msg   = Boolean(T_MSG);
+const want_xlsx  = Boolean(T_MSG || T_XLSX);
+const want_file  = Boolean(T_FILE);
+const want_skills_from_msg  = Boolean(T_MSG) && (ALL_ATTACH || !!KINDS);
+const want_skills_from_file = Boolean(T_FILE || T_XLSX);
+
 
   if(!want_eml && !want_msg && !want_xlsx){
     alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx のいずれかが必要）");
@@ -452,12 +459,13 @@ async function doUpload(){
     let xlsxTicket = null;
     let xlsxOrigFileName = null;
     if (want_xlsx) {
-      if (T_MSG) {
+      if (T_MSG) {if (!ALL_ATTACH && !KINDS) {
         log("→ msg-to-xlsx-ticket");
         const j = await createXlsxTicketFromMsg(T_MSG);
         xlsxTicket = j.ticket;
         xlsxOrigFileName = (j.fileName || "").trim();
-        log("xlsx ticket ok: " + xlsxOrigFileName);
+        log("xlsx ticket ok: " + xlsxOrigFileName);}
+
       } else if (T_XLSX) {
         xlsxTicket = T_XLSX;
         xlsxOrigFileName = "attachment.xlsx";
@@ -494,7 +502,9 @@ async function doUpload(){
 
     // 5) 4つ目：GitHub Raw から保存
     try{
-      log("→ upload-from-url: " + GITHUB_RAW_URL);
+      /* disabled old unconditional VBS block */
+// if(false){
+log("→ upload-from-url: " + GITHUB_RAW_URL);
       const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
       if (r4.ok && r4.body && r4.body.ok) {
         log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
@@ -509,6 +519,90 @@ async function doUpload(){
   } catch(e){
     log("❌ " + e.message);
   }
+// === Policy: EML always save (if provided), and Skillsheet flows ===
+// 0) EML保存（常に実行：ticket_eml または ticket）
+if (want_eml) {
+  const emlName = (q.get("eml_name") || "Report.eml");
+  log("→ eml upload as: " + emlName);
+  // }
+const r = await uploadOne(EP_UPLOAD_ORG, (T_EML || TICKET_SINGLE), emlName);
+  log(r.ok ? "✅ AI作成本文保存成功" : "❌ eml " + JSON.stringify(r.body));
+}
+
+// 1) .msg 原文保存（ある場合）
+if (want_msg) {
+  log("→ msg upload (original name)");
+  const r = await uploadOne(EP_UPLOAD_ORG, T_MSG, null);
+  log(r.ok ? "✅ BPさんからのメール保存成功" : "❌ msg " + JSON.stringify(r.body));
+}
+
+// 2) スキルシート保存（A: .msgから抽出 / B: 単体ファイル）
+let excelFound = false;
+
+// A) .msg → 複数添付抽出（kinds指定 or all_attachments=1）
+if (want_skills_from_msg) {
+  const body = new FormData();
+  body.append("msg_ticket", T_MSG);
+  if (KINDS) body.append("kinds", KINDS); // 例: "excel,pdf,word"
+  log("→ msg-to-attachment-tickets (ALL) kinds=" + (KINDS || "excel,pdf,word"));
+  const r = await fetch("/api/msg-to-attachment-tickets", { method: "POST", body });
+  const j = await r.json();
+  if (!r.ok || !j.ok) {
+    log("❌ plural " + JSON.stringify(j));
+  } else {
+    for (const t of j.tickets) {
+      log("→ upload " + t.kind + ": " + t.fileName);
+      const up = await uploadOne(EP_UPLOAD_ORG, t.ticket, null);
+      log(up.ok ? ("✅ 保存成功: " + t.fileName) : "❌ upload " + JSON.stringify(up.body));
+      if (t.kind === "excel" || /\.(xlsx|xlsm|xls|csv)$/i.test(t.fileName || "")) excelFound = true;
+    }
+  }
+}
+
+// B) 直チケット（ticket_file / ticket_xlsx）
+if (!want_skills_from_msg && want_skills_from_file) {
+  // xlsxチケット
+  if (T_XLSX) {
+    let xName = "attachment.xlsx";
+    try {
+      const r = await fetch(EP_PEEK + "?ticket=" + encodeURIComponent(T_XLSX));
+      const j = await r.json();
+      xName = (j && j.fileName) || xName;
+    } catch {}
+    const xlsxBase = (q.get("attach") || "SkillSheet");
+    let ext = ".xlsx";
+    if (xName && xName.includes(".")) ext = xName.slice(xName.lastIndexOf("."));
+    const finalName = xlsxBase + ext;
+    log("→ xlsx upload as: " + finalName);
+    const r = await uploadOne(EP_UPLOAD_ORG, T_XLSX, finalName);
+    log(r.ok ? "✅ 添付Excelスキルシート保存成功" : "❌ xlsx " + JSON.stringify(r.body));
+    if (/\.(xlsx|xlsm|xls|csv)$/i.test(finalName)) excelFound = true;
+  }
+  // 汎用ファイルチケット
+  if (T_FILE) {
+    let fname = "";
+    try {
+      const r = await fetch(EP_PEEK + "?ticket=" + encodeURIComponent(T_FILE));
+      const j = await r.json();
+      fname = (j && j.fileName) || "";
+    } catch {}
+    log("→ generic file upload (original name)");
+    const r = await uploadOne(EP_UPLOAD_ORG, T_FILE, null);
+    log(r.ok ? "✅ 添付ファイル保存成功" : "❌ generic " + JSON.stringify(r.body));
+    if (/\.(xlsx|xlsm|xls|csv)$/i.test(fname)) excelFound = true;
+  }
+}
+
+// 3) Excelが含まれていた場合は GitHub VBS も追加保存（現在地フォルダに）
+if (excelFound) {
+  /* disabled old unconditional VBS block */
+// if(false){
+log("→ upload-from-url: " + GITHUB_RAW_URL);
+  const r = await uploadFromUrl(GITHUB_RAW_URL, targetFolderId, GITHUB_SAVE_NAME);
+  log(r.ok ? ("✅ GitHubファイル保存成功: " + GITHUB_SAVE_NAME) : "❌ vbs " + JSON.stringify(r.body));
+// }
+}
+
 }
 
 // ピッカー操作

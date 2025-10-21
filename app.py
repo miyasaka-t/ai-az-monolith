@@ -1275,6 +1275,252 @@ def api_upload_from_url():
         return jsonify({"error": str(e)}), 400
 
 
+
+# 追加: Word / PDF / Excel 直POST → チケット化
+@app.post("/api/attachment-to-ticket")
+def api_attachment_to_ticket():
+    """
+    multipart/form-data:
+      file     : *.doc / *.docx / *.pdf / *.xlsx / *.xlsm / *.xls / *.csv (required)
+      fileName : 任意（未指定ならアップロード名）
+      ttlSec   : 任意（デフォルト10分）
+    JSONでも可:
+      {"data":"<base64>", "fileName":"...", "ttlSec":600}
+    """
+    try:
+        import os, base64, mimetypes
+        ttl = int(request.form.get("ttlSec") or request.args.get("ttlSec") or DEFAULT_TICKET_TTL)
+
+        # multipart or JSON の両対応
+        f = request.files.get("file")
+        if f:
+            raw = f.read()
+            name = (request.form.get("fileName") or getattr(f, "filename", None) or "attachment").strip()
+        else:
+            j = request.get_json(silent=True) or {}
+            if not j:
+                return jsonify({"error": "file or JSON data required"}), 400
+            raw_b64 = j.get("data")
+            raw = base64.b64decode(raw_b64) if raw_b64 else b""
+            name = (j.get("fileName") or "attachment").strip()
+
+        if not raw:
+            return jsonify({"error": "empty file"}), 400
+
+        # kind / mime 推定（許可拡張子のみ）
+        ext = (os.path.splitext(name)[1] or "").lower()
+        allowed = {
+            ".doc":  "application/msword",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".pdf":  "application/pdf",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xlsm": "application/vnd.ms-excel",
+            ".xls":  "application/vnd.ms-excel",
+            ".csv":  "text/csv",
+        }
+        if ext not in allowed:
+            return jsonify({"error": "unsupported extension", "fileName": name}), 400
+        mime = allowed.get(ext) or (mimetypes.guess_type(name)[0] or "application/octet-stream")
+
+        tid = save_ticket({
+            "type": "base64",
+            "fileName": name,
+            "mime": mime,
+            "data": base64.b64encode(raw).decode("ascii")
+        }, ttl=ttl)
+
+        # kind はフロント用途の情報（参考）
+        if ext in (".xlsx",".xlsm",".xls",".csv"): kind = "excel"
+        elif ext==".pdf": kind="pdf"
+        else: kind="word"
+
+        return jsonify({"ok": True, "ticket": tid, "fileName": name, "kind": kind, "mime": mime})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# 追加: Excelファイル単体でも「extract_mail」と同じJSON形でTSVを返す
+@app.post("/extract_excel_mailstyle")
+def extract_excel_mailstyle():
+    """
+    multipart/form-data:
+      file : *.xlsx / *.xlsm / *.xls / *.csv (required)
+      sheet: 任意（名前 or 0始まり/1始まりのインデックス）
+    JSONでも可:
+      {"data":"<base64>", "fileName":"...", "sheet":"Sheet1"}
+    戻り値は /extract_mail の excel_attachments と同じ形:
+      {
+        "ok": true,
+        "format": "excel",
+        "excel_attachments": [ { "filename": "...", "cells": "A1\\t...\\n..." } ]
+      }
+    """
+    try:
+        import base64 as _b64
+        import json as _json
+        from flask import Response as _Response
+
+        f = request.files.get("file")
+        sheet_req = request.form.get("sheet") or request.args.get("sheet")
+        data = None
+        filename = None
+
+        if f:
+            data = f.read()
+            filename = getattr(f, "filename", None) or "attachment.xlsx"
+            if not data:
+                return jsonify({"error": "empty file"}), 400
+        else:
+            j = request.get_json(silent=True) or {}
+            if not j:
+                return jsonify({"error": "file or JSON data required"}), 400
+            b64 = j.get("data") or ""
+            data = _b64.b64decode(b64) if b64 else b""
+            filename = j.get("fileName") or "attachment.xlsx"
+            sheet_req = j.get("sheet") or sheet_req
+            if not data:
+                return jsonify({"error": "empty file"}), 400
+
+        # 既存のExcel→TSVユーティリティを使用
+        cells_text = _excel_sparse_from_bytes(data, filename=filename, sheet_req=sheet_req)
+
+        payload = {
+            "ok": True,
+            "format": "excel",
+            "excel_attachments": [{
+                "filename": filename,
+                "cells": ("\ufeff" + cells_text)  # UTF-8 BOM 付与で既存と合わせる
+            }]
+        }
+        return _Response(_json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# 追加: .msg/.eml → （Excel/PDF/Word）すべての添付をチケット化（複数）
+@app.post("/api/msg-to-attachment-tickets")
+def api_msg_to_attachment_tickets():
+    """
+    入力（いずれか）: msg_ticket/ticket, multipart file, JSON {data,fileName}
+    任意: kinds="excel,pdf,word", baseName, ttlSec
+    出力: { ok, tickets: [{ticket,fileName,kind,mime}], count }
+    """
+    try:
+        import base64, os, mimetypes, tempfile
+        from email import policy
+        from email.parser import BytesParser
+
+        # 入力解析
+        j = request.get_json(silent=True) or {}
+        msg_tid = (
+            request.form.get("ticket") or request.form.get("msg_ticket") or
+            request.args.get("ticket") or request.args.get("msg_ticket") or
+            j.get("ticket") or j.get("msg_ticket") or (j.get("tickets",{}) or {}).get("file")
+        )
+        ttl_override = request.form.get("ttlSec") or request.args.get("ttlSec") or j.get("ttlSec")
+        base_name = (request.form.get("baseName") or request.args.get("baseName") or j.get("baseName") or "").strip()
+        kinds_str = (request.form.get("kinds") or request.args.get("kinds") or j.get("kinds") or "").strip().lower()
+        kinds_sel = set([s.strip() for s in kinds_str.split(",") if s.strip()]) if kinds_str else {"excel","pdf","word"}
+        ttl = int(ttl_override or DEFAULT_TICKET_TTL)
+
+        raw = None
+        src_name = None
+
+        f = request.files.get("file") or request.files.get("msg") or request.files.get("eml")
+        if f:
+            raw = f.read()
+            src_name = getattr(f, "filename", None) or "upload.bin"
+        elif msg_tid:
+            meta = redeem_ticket(msg_tid, consume=False)
+            src_name, raw, _ = materialize_bytes(meta)
+        elif j.get("data"):
+            raw = base64.b64decode(j["data"])
+            src_name = j.get("fileName") or "upload.bin"
+
+        if not raw:
+            return jsonify({"error": "missing input (ticket or file or data)"}), 400
+
+        # 添付抽出
+        extracted = []  # (fname, bytes, mime, kind)
+
+        def classify_and_add(fname, data, ctype):
+            def _kind(name, mime):
+                ln = (name or "").lower()
+                if ln.endswith((".xlsx",".xlsm",".xls",".csv")): return "excel"
+                if ln.endswith(".pdf") or (mime=="application/pdf"): return "pdf"
+                if ln.endswith((".doc",".docx")): return "word"
+                # MIMEからの補助判断
+                if (mime or "").startswith("application/vnd.openxmlformats-officedocument.spreadsheetml"):
+                    return "excel"
+                if (mime or "").startswith("application/msword") or (mime or "").endswith("wordprocessingml.document"):
+                    return "word"
+                return None
+
+            k = _kind(fname, ctype)
+            if k and k in kinds_sel and data:
+                ln = (fname or "").lower()
+                if k=="excel":
+                    if ln.endswith(".xlsx"): mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    elif ln.endswith((".xls",".xlsm")): mime="application/vnd.ms-excel"
+                    elif ln.endswith(".csv"): mime="text/csv"
+                    else: mime = ctype or "application/octet-stream"
+                elif k=="pdf":
+                    mime="application/pdf"
+                else:
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ln.endswith(".docx") else "application/msword"
+                extracted.append((fname or "attachment", data, mime, k))
+
+        lower = (src_name or "").lower()
+        if lower.endswith(".msg"):
+            try:
+                import extract_msg
+            except Exception as e:
+                return jsonify({"error":"extract_msg_not_available","detail":str(e)}), 500
+            with tempfile.NamedTemporaryFile(suffix=".msg", delete=True) as tmp:
+                tmp.write(raw); tmp.flush()
+                m = extract_msg.Message(tmp.name)
+                for att in m.attachments:
+                    fname = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or "attachment"
+                    data = getattr(att, "data", None)
+                    guess = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+                    if data: classify_and_add(fname, data, guess)
+        else:
+            msg = BytesParser(policy=policy.default).parsebytes(raw)
+            for part in msg.walk():
+                fname = part.get_filename()
+                cdisp = part.get_content_disposition()
+                ctype = part.get_content_type()
+                if cdisp == "attachment" or fname:
+                    data = part.get_payload(decode=True) or b""
+                    if data: classify_and_add(fname or "attachment", data, ctype or mimetypes.guess_type(fname or "")[0])
+
+        if not extracted:
+            return jsonify({"error": "no_allowed_attachment_found", "allowed": sorted(list(kinds_sel))}), 404
+
+        # チケット化
+        results = []
+        for (att_name, att_bytes, att_mime, kind) in extracted:
+            if base_name:
+                base_root, _ = os.path.splitext(base_name)
+                _, ext = os.path.splitext(att_name or "")
+                if not ext:
+                    ext = ".xlsx" if kind=="excel" else ".pdf" if kind=="pdf" else ".docx"
+                save_name = (base_root or "attachment") + ext
+            else:
+                save_name = att_name or "attachment"
+
+            tid = save_ticket({
+                "type": "base64",
+                "fileName": save_name,
+                "mime": att_mime or "application/octet-stream",
+                "data": base64.b64encode(att_bytes).decode("ascii")
+            }, ttl=ttl)
+            results.append({"ticket": tid, "fileName": save_name, "kind": kind, "mime": att_mime})
+
+        return jsonify({"ok": True, "tickets": results, "count": len(results)})
+    except KeyError:
+        return jsonify({"error": "ticket_not_found_or_expired"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
 # ===============================
 # メイン
 # ===============================
