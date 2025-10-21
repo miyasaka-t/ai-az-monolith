@@ -420,7 +420,7 @@ async function doUpload(){
 
   const want_eml  = Boolean(T_EML || TICKET_SINGLE);
   const want_msg  = Boolean(T_MSG);
-  const want_xlsx_direct = Boolean(T_XLSX); // 互換: すでに xlsx チケットが来ている
+  const want_xlsx_direct = Boolean(T_XLSX);
 
   if(!want_eml && !want_msg && !want_xlsx_direct){
     alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx / ticket のいずれかが必要）");
@@ -428,6 +428,24 @@ async function doUpload(){
   }
 
   try {
+    // **重要**: .msg チケットはアップロードで消費されるので、
+    // 先に抽出API（非消費）で添付チケットを作っておく
+    let extractedTickets = [];
+    if (want_msg) {
+      try{
+        const single = SINGLE_ATTACH && !ALL_ATTACH; // 単一指定時
+        extractedTickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
+        if (!extractedTickets.length) {
+          log("⚠️ 添付抽出なし");
+        } else {
+          if (single) log("→ 単一添付モード pick=first / limit=1");
+          if (KINDS)  log("→ kinds="+KINDS);
+        }
+      }catch(e){
+        log("⚠️ msg-to-attachment-tickets エラー: "+e.message);
+      }
+    }
+
     // 1) .eml 保存
     if (want_eml) {
       const t = T_EML || TICKET_SINGLE;
@@ -436,7 +454,7 @@ async function doUpload(){
       log(r.ok ? "✅ AI作成本文保存成功" : "❌ eml " + JSON.stringify(r.body));
     }
 
-    // 2) .msg 原文保存
+    // 2) .msg 原文保存（ここで msg チケットが消費される）
     if (want_msg) {
       log("→ msg upload (original name)");
       const r = await uploadOne(EP_UPLOAD_ORG, T_MSG, null);
@@ -456,39 +474,14 @@ async function doUpload(){
       }catch(e){ log("⚠️ xlsx direct upload error: "+e.message); }
     }
 
-    // 4) .msg から添付抽出（新API）
-    if (want_msg) {
-      try{
-        const single = SINGLE_ATTACH && !ALL_ATTACH; // 明示的に単一指定
-        const tickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
-        if (!tickets.length) {
-          log("⚠️ 添付抽出なし");
-        } else {
-          if (single) log("→ 単一添付モード pick=first / limit=1");
-          if (KINDS)  log("→ kinds="+KINDS);
-          for (const t of tickets){
-            const nm = t.fileName || "attachment";
-            log("→ attach upload: "+ nm + (t.kind?` (${t.kind})`:''));
-            const r = await uploadOne(EP_UPLOAD_ORG, t.ticket, nm);
-            log(r.ok ? "✅ 添付保存成功: "+nm : "❌ attach "+nm+" "+JSON.stringify(r.body));
-          }
-        }
-      }catch(e){
-        log("⚠️ msg-to-attachment-tickets エラー: "+e.message);
+    // 4) 先に抽出しておいた添付チケットを保存
+    if (extractedTickets && extractedTickets.length){
+      for (const t of extractedTickets){
+        const nm = t.fileName || "attachment";
+        log("→ attach upload: "+ nm + (t.kind?` (${t.kind})`:''));
+        const r = await uploadOne(EP_UPLOAD_ORG, t.ticket, nm);
+        log(r.ok ? "✅ 添付保存成功: "+nm : "❌ attach "+nm+" "+JSON.stringify(r.body));
       }
-    }
-
-    // 5) GitHub Raw から保存（任意）
-    try{
-      log("→ upload-from-url: " + GITHUB_RAW_URL);
-      const r4 = await uploadFromUrl(GITHUB_RAW_URL, targetFolderId, GITHUB_SAVE_NAME);
-      if (r4.ok && r4.body && r4.body.ok) {
-        log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
-      } else {
-        log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
-      }
-    }catch(e){
-      log("⚠️ upload-from-url エラー: " + e.message);
     }
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
