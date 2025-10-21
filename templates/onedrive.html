@@ -61,12 +61,11 @@
   .search-hint{font-size:12px;color:var(--muted)}
   mark{background:#ffe58f;border-radius:4px;padding:0 2px}
 
-
-/* --- additions (Home button & layout fixes) --- */
-.picker-breadcrumb{ display:none !important; } /* visually hide breadcrumb */
-#currentPath{ display:none !important; }       /* hide footer path */
-.picker-foot{ justify-content:flex-end !important; }
-.picker-foot > div{ display:flex; gap:8px; }
+  /* --- additions (Home button & layout fixes) --- */
+  .picker-breadcrumb{ display:none !important; }
+  #currentPath{ display:none !important; }
+  .picker-foot{ justify-content:flex-end !important; }
+  .picker-foot > div{ display:flex; gap:8px; }
 </style>
 
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
@@ -80,8 +79,8 @@
     <div class="muted" id="nm_eml_hint"></div>
   </div>
   <div class="col">
-    <label class="small">添付スキルシートのベース名（拡張子は添付のオリジナルを強制付与）</label>
-    <input id="xlsxBase" type="text" placeholder="SkillSheet">
+    <label class="small">添付ファイルのベース名（拡張子は添付のオリジナルを強制付与／複数時はそのまま）</label>
+    <input id="xlsxBase" type="text" placeholder="Attachment">
     <div class="muted" id="nm_xlsx_hint"></div>
   </div>
 </div>
@@ -109,8 +108,12 @@
         <button id="btnReload">⟳ 更新</button>
       </div>
     </div>
-    <div class="picker-search" id="pickerSearchBar">  <input id="folderSearch" type="text" placeholder="フォルダ名を検索（現在の階層内）" aria-label="フォルダ名を検索">  <button id="btnSearchClear" title="クリア">✕</button>  <div class="search-hint">Enterで決定、Escで閉じる</div></div>
-<div class="picker-breadcrumb" id="crumbs"></div>
+    <div class="picker-search" id="pickerSearchBar">
+      <input id="folderSearch" type="text" placeholder="フォルダ名を検索（現在の階層内）" aria-label="フォルダ名を検索">
+      <button id="btnSearchClear" title="クリア">✕</button>
+      <div class="search-hint">Enterで決定、Escで閉じる</div>
+    </div>
+    <div class="picker-breadcrumb" id="crumbs"></div>
     <div class="picker-body">
       <div class="th"><div>名前</div><div style="text-align:right">操作</div></div>
       <div id="list" class="list"></div>
@@ -132,39 +135,34 @@ const log = (m)=>{ $("log").textContent += m + "\n"; };
 // ===== クエリ初期化 =====
 const q = new URLSearchParams(location.search);
 const T_EML   = q.get("ticket_eml")   || "";
-const T_XLSX  = q.get("ticket_xlsx")  || "";
+const T_XLSX  = q.get("ticket_xlsx")  || ""; // 既存互換: 直接xlsxチケットが来るケース
 const T_MSG   = q.get("ticket_msg")   || "";
-const TICKET_SINGLE = q.get("ticket") || "";
-const SINGLE_ATTACH = (q.get("single_attach") || "0") === "1";
-const ALL_ATTACH = (q.get("all_attachments") || "0") === "1";
-const KINDS = (q.get("kinds") || "").toLowerCase();
+const TICKET_SINGLE = q.get("ticket") || ""; // 単一チケット（eml想定など互換）
+const SINGLE_ATTACH = (q.get("single_attach") || "0") === "1"; // 1つだけ保存したいとき
+const ALL_ATTACH = (q.get("all_attachments") || "0") === "1";  // 複数保存ON
+const KINDS = (q.get("kinds") || "").toLowerCase();              // "excel,pdf,word" など
 
 // ベース名初期値
 const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
-
-// 添付ベース名（クエリ優先・複数エイリアスに対応 / デフォルトは従来互換の "SkillSheet"）
-const ATTACH_Q =
-  (q.get("attach") ?? q.get("excel") ?? q.get("xlsx") ?? q.get("name_xlsx") ?? "").trim();
-const XLSX_BASE_INIT = ATTACH_Q || "SkillSheet";
+const ATTACH_Q = (q.get("attach") ?? q.get("excel") ?? q.get("xlsx") ?? q.get("name_xlsx") ?? "").trim();
+const XLSX_BASE_INIT = ATTACH_Q || "Attachment";
 
 $("emlBase").value  = EML_BASE_INIT;
 $("xlsxBase").value = XLSX_BASE_INIT;
 
-// エンドポイント
-const EP_PEEK             = "/tickets/peek";
-const EP_UPLOAD_ORG       = "/api/upload";
-const EP_LIST_FOLDERS     = "/api/drive/folders";
-const EP_CREATE_FOLDER    = "/api/drive/create-folder";
-const EP_CREATE_FOLDER_ALT= "/api/drive/createFolder";
-const EP_MSG_TO_XLSX_TID  = "/api/msg-to-xlsx-ticket";
-const EP_DELETE_FOLDER    = "/api/drive/delete-folder";
+// エンドポイント（旧APIは非推奨・使用しない）
+const EP_PEEK               = "/tickets/peek";
+const EP_UPLOAD_ORG         = "/api/upload";
+const EP_LIST_FOLDERS       = "/api/drive/folders";
+const EP_CREATE_FOLDER      = "/api/drive/create-folder";
+const EP_CREATE_FOLDER_ALT  = "/api/drive/createFolder";
+const EP_DELETE_FOLDER      = "/api/drive/delete-folder";
+const EP_MSG_TO_ATTACH_TIDS = "/api/msg-to-attachment-tickets"; // ← 新API（統一）
 
-// === 追加ここから（upload-from-url）===
+// === 追加（upload-from-url）===
 const EP_UPLOAD_FROM_URL  = "/api/upload-from-url";
-// 固定のGitHub Rawファイル（必要に応じて変更/フォーム化OK）
 const GITHUB_RAW_URL   = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/runmacro_onedrive.vbs";
 const GITHUB_SAVE_NAME = "runmacro_onedrive.vbs";
-// === 追加ここまで（upload-from-url）===
 
 // 初期ヒント
 (function initHints(){
@@ -172,10 +170,9 @@ const GITHUB_SAVE_NAME = "runmacro_onedrive.vbs";
   $("nm_xlsx_hint").textContent = "保存時は「" + $("xlsxBase").value + " + 添付の拡張子」を強制付与";
 })();
 
-
 // ===== フォルダ検索（Ctrl+F風） =====
-let lastFolders = [];           // 直近に読み込んだフォルダ一覧
-let filterWord = "";            // 現在の検索語
+let lastFolders = [];
+let filterWord = "";
 
 const searchBar = $("pickerSearchBar");
 const searchInput = $("folderSearch");
@@ -197,12 +194,9 @@ function toggleSearchBar(show){
   }
 }
 
-// 文字列エスケープ（XSS対策）
 function escHtml(s){
-  return (s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  return (s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
 }
-
-// ハイライト付与
 function highlight(text, q){
   if (!q) return escHtml(text);
   try{
@@ -214,7 +208,6 @@ function highlight(text, q){
   }
 }
 
-// Ctrl+F で検索バーを開く
 document.addEventListener("keydown", (ev)=>{
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
     ev.preventDefault();
@@ -224,23 +217,17 @@ document.addEventListener("keydown", (ev)=>{
     toggleSearchBar(false);
   }
 });
-
 btnSearchToggle.onclick = ()=> toggleSearchBar();
 btnSearchClear.onclick  = ()=> { searchInput.value=""; filterWord=""; renderList(lastFolders||[]); searchInput.focus(); };
-
-// 入力でフィルタリング（デバウンス）
 let _searchTimer = null;
 searchInput.addEventListener("input", ()=>{
   filterWord = searchInput.value.trim();
   clearTimeout(_searchTimer);
   _searchTimer = setTimeout(()=> renderList(lastFolders||[]), 100);
 });
-
-// Enterで確定（特に処理は不要だが、最初の候補を選択状態にする）
 searchInput.addEventListener("keydown", (ev)=>{
   if (ev.key === "Enter") {
     ev.preventDefault();
-    // 最初の行を選択
     const first = document.querySelector("#list .tr .rowbox");
     if (first) first.click();
   } else if (ev.key === "Escape") {
@@ -249,16 +236,13 @@ searchInput.addEventListener("keydown", (ev)=>{
   }
 });
 
-
-// ===== パンくず & パス描画ユーティリティ =====
+// ===== パンくず & パス描画 =====
 function renderCurrentPath(){
-  // 先頭は常に "/" で、選択フォルダ名は足さない（現在地のみ）
   const names = breadcrumb.map(c=>c.name);
   const joined = names.join("/");
   const path = (joined.startsWith("/") ? joined : ("/" + joined.replace(/^ルート\/?/, ""))).replace(/\/+/g,"/");
   $("currentPath").textContent = path === "/ルート" ? "/" : ("/" + breadcrumb.slice(1).map(c=>c.name).join("/"));
 }
-
 function renderBreadcrumb(){
   const btnH=document.getElementById("btnHome"); if(btnH){ btnH.disabled = (!currentId || currentId==="root"); }
   const el = $("crumbs");
@@ -294,7 +278,6 @@ function closePicker(){ $("picker").style.display="none"; }
 async function loadFolder(id,pushHistory=true,from="enter"){
   $("list").innerHTML=""; $("pickerSave").disabled=false;
   selectedRowEl = null;
-  // 階層移動時は検索語クリア（reload時のみ維持）
   if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; }
 
   try{
@@ -302,19 +285,19 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     const j=await r.json();
     if(!r.ok) throw new Error(j.error||r.statusText);
     if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
-    currentId=id||"root"; /* breadcrumb stays as-is; no parent push */ renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
+    currentId=id||"root"; renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
     renderList(lastFolders);
     renderCurrentPath();
   }catch(e){ log("❌ folder load: "+e.message); }
 }
-/* updateBreadcrumb deprecated: breadcrumb managed explicitly */
-  $("crumbs").innerHTML="";
-  breadcrumb.forEach((c,i)=>{
-    const s=document.createElement("span");
-    s.className="crumb"; s.textContent=c.name;
-    s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
-    $("crumbs").appendChild(s);
-  });
+
+$("crumbs").innerHTML="";
+breadcrumb.forEach((c,i)=>{
+  const s=document.createElement("span");
+  s.className="crumb"; s.textContent=c.name;
+  s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
+  $("crumbs").appendChild(s);
+});
   
 function renderList(folders){
   const list=$("list");
@@ -328,7 +311,6 @@ function renderList(folders){
   arr.forEach(f=>{
     const row=document.createElement("div"); row.className="tr";
     const left=document.createElement("div"); left.className="rowbox name"; left.innerHTML="📁 " + highlight(f.name, filterWord);
-    // クリックで選択
     left.onclick=()=>{
       if(selectedRowEl) selectedRowEl.classList.remove("selected");
       left.classList.add("selected");
@@ -338,7 +320,6 @@ function renderList(folders){
       $("pickerSave").disabled=false;
       renderCurrentPath();
     };
-    // ✅ ダブルクリックで開く（修正済み）
     left.ondblclick = () => enterFolder(f.id,f.name);
 
     const right=document.createElement("div"); right.className="act";
@@ -374,9 +355,7 @@ async function createFolderCall(url,parentId,name){
   const body={parentId:parentId||"root",name:(name||"").trim(),conflictBehavior:"rename"};
   const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const txt=await r.text(); let j; try{ j=JSON.parse(txt);}catch{ j={raw:txt}; }
-  log(`POST ${url} → ${r.status}
-req=${JSON.stringify(body)}
-res=${txt.substring(0,200)}`);
+  log(`POST ${url} → ${r.status}\nreq=${JSON.stringify(body)}\nres=${txt.substring(0,200)}`);
   return { ok:r.ok, status:r.status, json:j };
 }
 $("btnNewFolder").onclick=async()=>{
@@ -394,27 +373,29 @@ $("pickerCancel").onclick=closePicker;
 async function uploadOne(endpoint,ticket,nameOverride){
   const fd=new FormData();
   fd.append("ticket",ticket);
-  fd.append("folderId",pickedFolderId);
+  fd.append("folderId",pickedFolderId || currentId || "root");
   if(nameOverride) fd.append("fileName",nameOverride);
   const r=await fetch(endpoint,{method:"POST",body:fd});
   const j=await r.json().catch(()=>({}));
   return { ok:r.ok, status:r.status, body:j };
 }
 
-// .msg → .xlsx チケット化
-async function createXlsxTicketFromMsg(msgTicket){
-  const body = { ticket: msgTicket };
-  const r = await fetch(EP_MSG_TO_XLSX_TID, {
+// 旧: .msg→xlsx は廃止。新: .msg/.eml → 添付（excel/pdf/word）複数チケット化
+async function createAttachmentTicketsFromMsg(msgTicket, baseName, kinds, single){
+  const payload = { ticket: msgTicket };
+  if (baseName && baseName.trim()) payload.baseName = baseName.trim();
+  if (kinds && kinds.trim()) payload.kinds = kinds.trim();
+  if (single === true) { payload.limit = 1; payload.pick = "first"; }
+  const r = await fetch(EP_MSG_TO_ATTACH_TIDS, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(payload)
   });
   const j = await r.json().catch(()=>({}));
-  if (!r.ok || !j.ok) throw new Error("msg-to-xlsx-ticket failed: "+JSON.stringify(j));
-  return j; // { ok, ticket, fileName }
+  if (!r.ok || !j.ok) throw new Error("msg-to-attachment-tickets failed: "+JSON.stringify(j));
+  return j.tickets || [];
 }
 
-// === 追加ここから（upload-from-url）===
 // URLから直接アップロード（GitHub Rawなど）
 async function uploadFromUrl(url, folderId, fileName){
   const body = { url, folderId, fileName };
@@ -426,48 +407,28 @@ async function uploadFromUrl(url, folderId, fileName){
   const j = await r.json().catch(()=>({}));
   return { ok:r.ok, status:r.status, body:j };
 }
-// === 追加ここまで（upload-from-url）===
 
-// ===== 3つすべて保存（来ているチケットは全部） + 4つ目のGitHub保存 =====
+// ===== すべて保存（EML / MSG / 添付） + 4つ目のGitHub保存 =====
 async function doUpload(){
-  // 保存先: 選択があれば選択先、なければ現在のフォルダ
   const targetFolderId = pickedFolderId || currentId || "root";
   const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
   $("pickedHint").textContent = "保存先: " + targetFolderName;
 
-  // 入力されたベース名
   const emlBase  = ($("emlBase").value  || "Report").trim();
-  const xlsxBase = ($("xlsxBase").value || "SkillSheet").trim();
+  const attachBase = ($("xlsxBase").value || "Attachment").trim();
   const emlName = emlBase.toLowerCase().endsWith(".eml") ? emlBase : (emlBase + ".eml");
 
-  // 3点：EML / MSG / (MSG→)XLSX を全保存（来ているものは全部）
   const want_eml  = Boolean(T_EML || TICKET_SINGLE);
   const want_msg  = Boolean(T_MSG);
-  const want_xlsx = Boolean(T_MSG || T_XLSX);
+  const want_xlsx_direct = Boolean(T_XLSX); // 互換: すでに xlsx チケットが来ている
 
-  if(!want_eml && !want_msg && !want_xlsx){
-    alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx のいずれかが必要）");
+  if(!want_eml && !want_msg && !want_xlsx_direct){
+    alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx / ticket のいずれかが必要）");
     return;
   }
 
   try {
-    // 1) xlsx チケットの用意（拡張子確認のため最初に）
-    let xlsxTicket = null;
-    let xlsxOrigFileName = null;
-    if (want_xlsx) {
-      if (T_MSG) {
-        log("→ msg-to-xlsx-ticket");
-        const j = await createXlsxTicketFromMsg(T_MSG);
-        xlsxTicket = j.ticket;
-        xlsxOrigFileName = (j.fileName || "").trim();
-        log("xlsx ticket ok: " + xlsxOrigFileName);
-      } else if (T_XLSX) {
-        xlsxTicket = T_XLSX;
-        xlsxOrigFileName = "attachment.xlsx";
-      }
-    }
-
-    // 2) .eml 保存
+    // 1) .eml 保存
     if (want_eml) {
       const t = T_EML || TICKET_SINGLE;
       log("→ eml upload as: " + emlName);
@@ -475,30 +436,52 @@ async function doUpload(){
       log(r.ok ? "✅ AI作成本文保存成功" : "❌ eml " + JSON.stringify(r.body));
     }
 
-    // 3) .msg 原文保存
+    // 2) .msg 原文保存
     if (want_msg) {
       log("→ msg upload (original name)");
       const r = await uploadOne(EP_UPLOAD_ORG, T_MSG, null);
       log(r.ok ? "✅ BPさんからのメール保存成功" : "❌ msg " + JSON.stringify(r.body));
     }
 
-    // 4) xlsx 保存（ベース名 + 元拡張子）
-    if (want_xlsx && xlsxTicket) {
-      let ext = ".xlsx";
-      if (xlsxOrigFileName && xlsxOrigFileName.includes(".")) {
-        const i = xlsxOrigFileName.lastIndexOf(".");
-        ext = xlsxOrigFileName.slice(i);
-      }
-      const xlsxFinalName = (xlsxBase || "SkillSheet") + ext;
-      log("→ xlsx upload as: " + xlsxFinalName);
-      const r = await uploadOne(EP_UPLOAD_ORG, xlsxTicket, xlsxFinalName);
-      log(r.ok ? "✅ 添付Excelスキルシート保存成功" : "❌ xlsx " + JSON.stringify(r.body));
+    // 3) 直接来た xlsx チケット（互換）
+    if (want_xlsx_direct) {
+      try{
+        const peek = await fetch(EP_PEEK+"?ticket="+encodeURIComponent(T_XLSX)).then(r=>r.json());
+        const orig = (peek && peek.fileName) || "attachment.xlsx";
+        const ext = (orig.lastIndexOf(".")>=0) ? orig.slice(orig.lastIndexOf(".")) : ".xlsx";
+        const final = (attachBase || "Attachment") + ext;
+        log("→ direct xlsx upload as: "+ final);
+        const r = await uploadOne(EP_UPLOAD_ORG, T_XLSX, final);
+        log(r.ok ? "✅ 添付（既存xlsx）保存成功" : "❌ xlsx " + JSON.stringify(r.body));
+      }catch(e){ log("⚠️ xlsx direct upload error: "+e.message); }
     }
 
-    // 5) 4つ目：GitHub Raw から保存
+    // 4) .msg から添付抽出（新API）
+    if (want_msg) {
+      try{
+        const single = SINGLE_ATTACH && !ALL_ATTACH; // 明示的に単一指定
+        const tickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
+        if (!tickets.length) {
+          log("⚠️ 添付抽出なし");
+        } else {
+          if (single) log("→ 単一添付モード pick=first / limit=1");
+          if (KINDS)  log("→ kinds="+KINDS);
+          for (const t of tickets){
+            const nm = t.fileName || "attachment";
+            log("→ attach upload: "+ nm + (t.kind?` (${t.kind})`:''));
+            const r = await uploadOne(EP_UPLOAD_ORG, t.ticket, nm);
+            log(r.ok ? "✅ 添付保存成功: "+nm : "❌ attach "+nm+" "+JSON.stringify(r.body));
+          }
+        }
+      }catch(e){
+        log("⚠️ msg-to-attachment-tickets エラー: "+e.message);
+      }
+    }
+
+    // 5) GitHub Raw から保存（任意）
     try{
       log("→ upload-from-url: " + GITHUB_RAW_URL);
-      const r4 = await uploadFromUrl(GITHUB_RAW_URL, pickedFolderId, GITHUB_SAVE_NAME);
+      const r4 = await uploadFromUrl(GITHUB_RAW_URL, targetFolderId, GITHUB_SAVE_NAME);
       if (r4.ok && r4.body && r4.body.ok) {
         log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
       } else {
@@ -510,16 +493,15 @@ async function doUpload(){
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
   } catch(e){
-    log("❌ " + e.message);
+    log("❌ "+ e.message);
   }
 }
 
 // ピッカー操作
 $("openPicker").onclick=openPicker;
 $("pickerSave").onclick=async ()=>{
-  // 選択がなくても現在地に保存する
   closePicker();
-  await doUpload(); // ピッカー内の「保存」で即アップロード
+  await doUpload();
 };
 function goToRoot(){
   try{
