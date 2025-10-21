@@ -1499,17 +1499,37 @@ def api_msg_to_attachment_tickets():
                             )
                         extracted.append((fname, data, mime, k))
         else:
-            # EML として扱う
-            msg = BytesParser(policy=policy.default).parsebytes(raw)
-            for part in msg.walk():
-                fname = part.get_filename()
-                cdisp = part.get_content_disposition()
-                ctype = part.get_content_type()
-                if cdisp == "attachment" or fname:
-                    data = part.get_payload(decode=True) or b""
-                    k = classify(fname or "attachment", ctype or None)
-                    if k and k in kinds_sel and data:
-                        extracted.append((fname or "attachment", data, ctype or "application/octet-stream", k))
+            # 追加: 直投稿された Excel/PDF/Word を一件として扱う（なければ EML として解釈）
+            k_direct = classify(src_name or "upload.bin", None)
+            if k_direct and k_direct in kinds_sel:
+                ln = (src_name or "").lower()
+                if k_direct == "excel":
+                    if ln.endswith(".xlsx"):
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    elif ln.endswith((".xls", ".xlsm")):
+                        mime = "application/vnd.ms-excel"
+                    elif ln.endswith(".csv"):
+                        mime = "text/csv"
+                    else:
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                elif k_direct == "pdf":
+                    mime = "application/pdf"
+                else:
+                    mime = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            if ln.endswith(".docx") else "application/msword")
+                extracted.append((src_name or "attachment", raw, mime, k_direct))
+            else:
+                # EML として扱う
+                msg = BytesParser(policy=policy.default).parsebytes(raw)
+                for part in msg.walk():
+                    fname = part.get_filename()
+                    cdisp = part.get_content_disposition()
+                    ctype = part.get_content_type()
+                    if cdisp == "attachment" or fname:
+                        data = part.get_payload(decode=True) or b""
+                        k = classify(fname or "attachment", ctype or None)
+                        if k and k in kinds_sel and data:
+                            extracted.append((fname or "attachment", data, ctype or "application/octet-stream", k))
 
         if not extracted:
             return jsonify({"error": "no_allowed_attachment_found", "allowed": sorted(list(kinds_sel))}), 404

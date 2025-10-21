@@ -136,6 +136,8 @@ const log = (m)=>{ $("log").textContent += m + "\n"; };
 const q = new URLSearchParams(location.search);
 const T_EML   = q.get("ticket_eml")   || "";
 const T_XLSX  = q.get("ticket_xlsx")  || ""; // 直接 xlsx チケットが来る互換ケース
+const T_PDF   = q.get("ticket_pdf")   || ""; // 直接 pdf チケット
+const T_WORD  = q.get("ticket_word")  || ""; // 直接 word チケット
 const T_MSG   = q.get("ticket_msg")   || "";
 const TICKET_SINGLE = q.get("ticket") || ""; // 単一チケット（eml想定など互換）
 const SINGLE_ATTACH = (q.get("single_attach") || "0") === "1"; // 1つだけ保存したいとき
@@ -417,10 +419,10 @@ async function doUpload(){
 
   const want_eml  = Boolean(T_EML || TICKET_SINGLE);
   const want_msg  = Boolean(T_MSG);
-  const want_xlsx_direct = Boolean(T_XLSX);
+  const want_direct = Boolean(T_XLSX || T_PDF || T_WORD);
 
-  if(!want_eml && !want_msg && !want_xlsx_direct){
-    alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx / ticket のいずれかが必要）");
+  if(!want_eml && !want_msg && !want_direct){
+    alert("保存するチケットがありません（ticket_eml / ticket_msg / ticket_xlsx / ticket_pdf / ticket_word / ticket のいずれかが必要）");
     return;
   }
 
@@ -460,17 +462,27 @@ async function doUpload(){
       log(r.ok ? "✅ BPさんからのメール保存成功" : "❌ msg " + JSON.stringify(r.body));
     }
 
-    // 3) 直接来た xlsx チケット（互換）
-    if (want_xlsx_direct) {
+
+    // 3) 直接来たファイル（xlsx/pdf/word）チケット（互換）
+    const directTickets = [
+      { tid: T_XLSX, kind: "excel" },
+      { tid: T_PDF,  kind: "pdf"   },
+      { tid: T_WORD, kind: "word"  },
+    ].filter(x => !!x.tid);
+
+    for (const d of directTickets) {
       try{
-        const peek = await fetch(EP_PEEK+"?ticket="+encodeURIComponent(T_XLSX)).then(r=>r.json());
-        const orig = (peek && peek.fileName) || "attachment.xlsx";
-        const ext = (orig.lastIndexOf(".")>=0) ? orig.slice(orig.lastIndexOf(".")) : ".xlsx";
+        const peek = await fetch(EP_PEEK+"?ticket="+encodeURIComponent(d.tid)).then(r=>r.json());
+        const orig = (peek && peek.fileName) || "attachment";
+        const ext  = (orig.lastIndexOf(".")>=0) ? orig.slice(orig.lastIndexOf(".")) :
+                      (d.kind==="excel"?".xlsx": d.kind==="pdf"?".pdf": ".docx");
         const final = (attachBase || "Attachment") + ext;
-        log("→ direct xlsx upload as: "+ final);
-        const r = await uploadOne(EP_UPLOAD_ORG, T_XLSX, final);
-        log(r.ok ? "✅ 添付（既存xlsx）保存成功" : "❌ xlsx " + JSON.stringify(r.body));
-      }catch(e){ log("⚠️ xlsx direct upload error: "+e.message); }
+        log(`→ direct ${d.kind} upload as: ${final}`);
+        const r = await uploadOne(EP_UPLOAD_ORG, d.tid, final);
+        log(r.ok ? `✅ 添付（既存${d.kind}）保存成功` : `❌ ${d.kind} ` + JSON.stringify(r.body));
+      }catch(e){
+        log(`⚠️ ${d.kind} direct upload error: `+e.message);
+      }
     }
 
     // 4) 先に抽出しておいた添付チケットを保存
