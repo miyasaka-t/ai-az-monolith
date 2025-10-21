@@ -58,7 +58,7 @@
   .picker-search{display:none;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);background:#f9fafb}
   .picker-search.show{display:flex}
   #folderSearch{flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
-  .search-hint{font-size:12px;color:var(--muted)}
+  .search-hint{font-size:12px;color:#6b7280}
   mark{background:#ffe58f;border-radius:4px;padding:0 2px}
 
   /* --- additions (Home button & layout fixes) --- */
@@ -135,7 +135,7 @@ const log = (m)=>{ $("log").textContent += m + "\n"; };
 // ===== クエリ初期化 =====
 const q = new URLSearchParams(location.search);
 const T_EML   = q.get("ticket_eml")   || "";
-const T_XLSX  = q.get("ticket_xlsx")  || ""; // 既存互換: 直接xlsxチケットが来るケース
+const T_XLSX  = q.get("ticket_xlsx")  || ""; // 直接 xlsx チケットが来る互換ケース
 const T_MSG   = q.get("ticket_msg")   || "";
 const TICKET_SINGLE = q.get("ticket") || ""; // 単一チケット（eml想定など互換）
 const SINGLE_ATTACH = (q.get("single_attach") || "0") === "1"; // 1つだけ保存したいとき
@@ -150,16 +150,16 @@ const XLSX_BASE_INIT = ATTACH_Q || "Attachment";
 $("emlBase").value  = EML_BASE_INIT;
 $("xlsxBase").value = XLSX_BASE_INIT;
 
-// エンドポイント（旧APIは非推奨・使用しない）
+// エンドポイント
 const EP_PEEK               = "/tickets/peek";
 const EP_UPLOAD_ORG         = "/api/upload";
 const EP_LIST_FOLDERS       = "/api/drive/folders";
 const EP_CREATE_FOLDER      = "/api/drive/create-folder";
 const EP_CREATE_FOLDER_ALT  = "/api/drive/createFolder";
 const EP_DELETE_FOLDER      = "/api/drive/delete-folder";
-const EP_MSG_TO_ATTACH_TIDS = "/api/msg-to-attachment-tickets"; // ← 新API（統一）
+const EP_MSG_TO_ATTACH_TIDS = "/api/msg-to-attachment-tickets"; // 新API（統一）
 
-// === 追加（upload-from-url）===
+// === upload-from-url（GitHub Raw など）===
 const EP_UPLOAD_FROM_URL  = "/api/upload-from-url";
 const GITHUB_RAW_URL   = "https://github.com/miyasaka-t/macros/raw/refs/heads/main/runmacro_onedrive.vbs";
 const GITHUB_SAVE_NAME = "runmacro_onedrive.vbs";
@@ -195,14 +195,17 @@ function toggleSearchBar(show){
 }
 
 function escHtml(s){
-  return (s||"").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+  return (s || "").replace(/[&<>"']/g, function(m){
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
+  });
 }
+
 function highlight(text, q){
   if (!q) return escHtml(text);
   try{
     const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(esc, "ig");
-    return escHtml(text).replace(re, m => `<mark>${escHtml(m)}</mark>`);
+    return escHtml(text).replace(re, (m)=>`<mark>${escHtml(m)}</mark>`);
   }catch(e){
     return escHtml(text);
   }
@@ -290,14 +293,6 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     renderCurrentPath();
   }catch(e){ log("❌ folder load: "+e.message); }
 }
-
-$("crumbs").innerHTML="";
-breadcrumb.forEach((c,i)=>{
-  const s=document.createElement("span");
-  s.className="crumb"; s.textContent=c.name;
-  s.onclick=()=>{ breadcrumb=breadcrumb.slice(0,i+1); loadFolder(c.id,false,"crumb"); };
-  $("crumbs").appendChild(s);
-});
   
 function renderList(folders){
   const list=$("list");
@@ -355,7 +350,9 @@ async function createFolderCall(url,parentId,name){
   const body={parentId:parentId||"root",name:(name||"").trim(),conflictBehavior:"rename"};
   const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const txt=await r.text(); let j; try{ j=JSON.parse(txt);}catch{ j={raw:txt}; }
-  log(`POST ${url} → ${r.status}\nreq=${JSON.stringify(body)}\nres=${txt.substring(0,200)}`);
+  log(`POST ${url} → ${r.status}
+req=${JSON.stringify(body)}
+res=${txt.substring(0,200)}`);
   return { ok:r.ok, status:r.status, json:j };
 }
 $("btnNewFolder").onclick=async()=>{
@@ -380,7 +377,7 @@ async function uploadOne(endpoint,ticket,nameOverride){
   return { ok:r.ok, status:r.status, body:j };
 }
 
-// 旧: .msg→xlsx は廃止。新: .msg/.eml → 添付（excel/pdf/word）複数チケット化
+// .msg/.eml → 添付（excel/pdf/word）複数チケット化（旧API置換）
 async function createAttachmentTicketsFromMsg(msgTicket, baseName, kinds, single){
   const payload = { ticket: msgTicket };
   if (baseName && baseName.trim()) payload.baseName = baseName.trim();
@@ -408,7 +405,7 @@ async function uploadFromUrl(url, folderId, fileName){
   return { ok:r.ok, status:r.status, body:j };
 }
 
-// ===== すべて保存（EML / MSG / 添付） + 4つ目のGitHub保存 =====
+// ===== すべて保存（EML / MSG / 添付） + 条件付き GitHub保存 =====
 async function doUpload(){
   const targetFolderId = pickedFolderId || currentId || "root";
   const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
@@ -428,18 +425,20 @@ async function doUpload(){
   }
 
   try {
-    // **重要**: .msg チケットはアップロードで消費されるので、
-    // 先に抽出API（非消費）で添付チケットを作っておく
+    // 0) まず .msg の添付抽出（非消費）→ Excel 含有チェック
     let extractedTickets = [];
+    let hasExcelInMsg = false;
     if (want_msg) {
       try{
         const single = SINGLE_ATTACH && !ALL_ATTACH; // 単一指定時
         extractedTickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
+        hasExcelInMsg = extractedTickets.some(t => (t.kind||"") === "excel");
         if (!extractedTickets.length) {
           log("⚠️ 添付抽出なし");
         } else {
           if (single) log("→ 単一添付モード pick=first / limit=1");
           if (KINDS)  log("→ kinds="+KINDS);
+          log("抽出件数: "+extractedTickets.length+ (hasExcelInMsg?"（Excel含む）":""));
         }
       }catch(e){
         log("⚠️ msg-to-attachment-tickets エラー: "+e.message);
@@ -454,7 +453,7 @@ async function doUpload(){
       log(r.ok ? "✅ AI作成本文保存成功" : "❌ eml " + JSON.stringify(r.body));
     }
 
-    // 2) .msg 原文保存（ここで msg チケットが消費される）
+    // 2) .msg 原文保存（ここで msg チケット消費）
     if (want_msg) {
       log("→ msg upload (original name)");
       const r = await uploadOne(EP_UPLOAD_ORG, T_MSG, null);
@@ -484,6 +483,23 @@ async function doUpload(){
       }
     }
 
+    // 5) 条件付き GitHub VBS 保存：.msg の添付に Excel が含まれていた場合のみ
+    if (want_msg && hasExcelInMsg) {
+      try{
+        log("→ 条件一致（Excel添付あり）: upload-from-url " + GITHUB_RAW_URL);
+        const r4 = await uploadFromUrl(GITHUB_RAW_URL, targetFolderId, GITHUB_SAVE_NAME);
+        if (r4.ok && r4.body && r4.body.ok) {
+          log("✅ GitHubファイル保存成功: " + (r4.body.name || GITHUB_SAVE_NAME));
+        } else {
+          log("⚠️ GitHub保存失敗: " + JSON.stringify(r4.body));
+        }
+      }catch(e){
+        log("⚠️ upload-from-url エラー: " + e.message);
+      }
+    } else {
+      log("（VBS保存条件不一致: .msgのExcel添付なし）");
+    }
+
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
   } catch(e){
     log("❌ "+ e.message);
@@ -496,6 +512,7 @@ $("pickerSave").onclick=async ()=>{
   closePicker();
   await doUpload();
 };
+
 function goToRoot(){
   try{
     historyStack = [];
