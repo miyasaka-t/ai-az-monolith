@@ -496,7 +496,8 @@ async function doUpload(){
     }
 
     // 5) 条件付き GitHub VBS 保存：.msg の添付に Excel が含まれていた場合のみ
-    if (want_msg && hasExcelInMsg) {
+    const shouldSaveVbs = (hasExcelInMsg || Boolean(T_XLSX));
+    if (shouldSaveVbs) {
       try{
         log("→ 条件一致（Excel添付あり）: upload-from-url " + GITHUB_RAW_URL);
         const r4 = await uploadFromUrl(GITHUB_RAW_URL, targetFolderId, GITHUB_SAVE_NAME);
@@ -509,7 +510,7 @@ async function doUpload(){
         log("⚠️ upload-from-url エラー: " + e.message);
       }
     } else {
-      log("（VBS保存条件不一致: .msgのExcel添付なし）");
+      log("（VBS保存条件不一致: Excelが存在しない）");
     }
 
     $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
