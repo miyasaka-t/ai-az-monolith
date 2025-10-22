@@ -1710,11 +1710,3 @@ def extract_pdf_tables():
     except Exception as e:
         payload = {"ok": False, "error": f"extract_failed: {e}", "filename": fname}
         return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
-
-
-# === Alias endpoint: Excel単品→セル番地TSV（msg添付と同じ返却フォーマット） ===
-# 既存の /extract_excel_mailstyle と全く同じ処理を、API名前空間にも用意
-@app.post("/api/excel-to-tsv")
-def api_excel_to_tsv():
-    # 既存実装をそのまま呼ぶだけ（同一レスポンス）
-    return extract_excel_mailstyle()

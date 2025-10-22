@@ -135,7 +135,7 @@ const log = (m)=>{ $("log").textContent += m + "\n"; };
 // ===== クエリ初期化 =====
 const q = new URLSearchParams(location.search);
 const T_EML   = q.get("ticket_eml")   || "";
-const T_XLSX  = q.get("ticket_xlsx")  || ""; // 直接 xlsx チケットが来る互換ケース
+const T_XLSX  = q.get("ticket_xlsx")  || "";
 const T_PDF   = q.get("ticket_pdf")   || ""; // 直接 pdf チケット
 const T_WORD  = q.get("ticket_word")  || ""; // 直接 word チケット
 const T_MSG   = q.get("ticket_msg")   || "";
@@ -533,4 +533,48 @@ function goToRoot(){
   }catch(e){ log("❌ goToRoot: " + e.message); }
 }
 try{ document.getElementById("btnHome").onclick = goToRoot; }catch(e){}
+
+async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attachBase, kind) {
+  const peek = await fetch(endpointPeek + "?ticket=" + encodeURIComponent(ticketId)).then(r => r.json());
+  const orig = (peek && peek.fileName) || "attachment";
+  const dot = orig.lastIndexOf(".");
+  let ext = dot >= 0 ? orig.slice(dot) : "";
+  if (!ext) {
+    if (kind === "excel") ext = ".xlsx";
+    else if (kind === "pdf") ext = ".pdf";
+    else if (kind === "word") ext = ".docx";
+  }
+  const final = (attachBase && attachBase.trim()) ? (attachBase.trim() + ext.toLowerCase()) : orig;
+  const fd = new FormData();
+  fd.append("ticket", ticketId);
+  fd.append("fileName", final);
+  const r = await fetch((window.EP_UPLOAD_ORG || "/api/upload"), { method: "POST", body: fd });
+  try { return await r.json(); } catch { return { ok: false, status: r.status }; }
+}
+
+
+// === Added: process direct xlsx/pdf/word tickets based on query ===
+(async () => {
+  try {
+    const url = new URL(window.location.href);
+    const q = url.searchParams;
+    const T_XLSX = q.get("ticket_xlsx") || "";
+    const T_PDF  = q.get("ticket_pdf")  || "";
+    const T_WORD = q.get("ticket_word") || "";
+    const ATTACH = (q.get("attach") || "").trim();
+    const attachBase = ATTACH || "Attachment";
+
+    const jobs = [];
+    if (T_XLSX) jobs.push(uploadDirectTicket((window.EP_PEEK || "/api/tickets/peek"), (window.EP_UPLOAD_ORG || "/api/upload"), T_XLSX, attachBase, "excel"));
+    if (T_PDF)  jobs.push(uploadDirectTicket((window.EP_PEEK || "/api/tickets/peek"), (window.EP_UPLOAD_ORG || "/api/upload"), T_PDF,  attachBase, "pdf"));
+    if (T_WORD) jobs.push(uploadDirectTicket((window.EP_PEEK || "/api/tickets/peek"), (window.EP_UPLOAD_ORG || "/api/upload"), T_WORD, attachBase, "word"));
+
+    if (jobs.length) {
+      const results = await Promise.all(jobs);
+      console.log("Direct ticket uploads:", results);
+    }
+  } catch (e) {
+    console.warn("direct tickets handling failed:", e);
+  }
+})();
 </script>
