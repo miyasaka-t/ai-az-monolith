@@ -134,6 +134,28 @@
 </div>
 
 <script>
+
+// --- early helpers to avoid ReferenceError before main helpers are defined ---
+function setSaveState(state){
+  const btn = $("pickerSave");
+  if (!btn) return;
+  if (state === "ready") {
+    btn.disabled = false;
+    btn.classList.remove("btn-wait");
+    btn.classList.add("btn-ready");
+  } else {
+    btn.disabled = true;
+    btn.classList.remove("btn-ready");
+    btn.classList.add("btn-wait");
+  }
+}
+function updateSaveState(){
+  const btn = $("pickerSave");
+  if (!btn) return;
+  const canSave = !!(typeof pickedFolderId !== "undefined" && pickedFolderId) || !(typeof isLoading !== "undefined" ? isLoading : false);
+  setSaveState(canSave ? "ready" : "waiting");
+}
+
 const $ = (id)=>document.getElementById(id);
 const log = (m)=>{ $("log").textContent += m + "\n"; };
 
@@ -326,7 +348,7 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     isLoading = false; updateSaveState();
     renderList(lastFolders);
     renderCurrentPath();
-  }catch(e){ log("❌ folder load: "+e.message); }
+  }catch(e){ log("❌ folder load: " + e.message); isLoading = false; updateSaveState(); }
 }
   
 function renderList(folders){
