@@ -159,6 +159,12 @@ function updateSaveState(){
   if (hasPicked) { setSaveState("ready"); return; }
   setSaveState(loading ? "waiting" : "ready");
 }
+function setPickedHint(){
+  try{
+    const name = pickedFolderName || ((breadcrumb && breadcrumb.length) ? (breadcrumb[breadcrumb.length-1].name || "/") : "/");
+    $("pickedHint").textContent = "保存先: " + (name || "/");
+  }catch(e){ /* no-op */ }
+}
 
 const $ = (id)=>document.getElementById(id);
 const log = (m)=>{ $("log").textContent += m + "\n"; };
@@ -306,7 +312,7 @@ let isNavigating = false;
 function openPicker(){
   pickedFolderId=null; pickedFolderName=null;
   isNavigating = true; isLoading = true; updateSaveState();
-  $("picker").style.display="flex";
+  $("picker").style.display="flex"; setPickedHint();
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
   loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
@@ -327,9 +333,9 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     currentId=id||"root"; renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
     renderList(lastFolders);
     renderCurrentPath();
-    pickedFolderId = null; pickedFolderName = null;
+    pickedFolderId = null; pickedFolderName = null; setPickedHint();
     isLoading = false; isNavigating = false; updateSaveState();
-  }catch(e){ log("❌ folder load: "+e.message); isLoading = false; isNavigating = false; updateSaveState(); }
+  }catch(e){ log("❌ folder load: "+e.message); isLoading = false; isNavigating = false; updateSaveState(); setPickedHint(); }
 }
   
 function renderList(folders){
@@ -350,7 +356,7 @@ function renderList(folders){
       selectedRowEl = left;
       pickedFolderId = f.id;
       pickedFolderName = f.name;
-      isNavigating = false; updateSaveState(); $("pickerSave").disabled=false;
+      isNavigating = false; updateSaveState(); setPickedHint(); $("pickerSave").disabled=false;
       renderCurrentPath();
     };
     left.ondblclick = () => enterFolder(f.id,f.name);
@@ -447,7 +453,7 @@ async function uploadFromUrl(url, folderId, fileName){
 async function doUpload(){
   const targetFolderId = pickedFolderId || currentId || "root";
   const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
-  $("pickedHint").textContent = "保存先: " + targetFolderName;
+  setPickedHint();
 
   const emlBase  = ($("emlBase").value  || "Report").trim();
   const attachBase = ($("xlsxBase").value || "Attachment").trim();
@@ -549,7 +555,7 @@ async function doUpload(){
       log("（VBS保存条件不一致: Excelが存在しない）");
     }
 
-    $("pickedHint").textContent = "保存先: " + (pickedFolderName || pickedFolderId);
+    setPickedHint();
   } catch(e){
     log("❌ "+ e.message);
   }
