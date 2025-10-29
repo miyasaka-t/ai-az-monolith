@@ -155,11 +155,9 @@ function updateSaveState(){
   const nav = (typeof isNavigating !== "undefined" ? isNavigating : false);
   const loading = (typeof isLoading !== "undefined" ? isLoading : false);
   const hasPicked = !!(typeof pickedFolderId !== "undefined" && pickedFolderId);
-  // During navigation (dblclick/back/up/home/reload), always WAITING
-  // When not navigating and not loading: READY
-  // When loading but not navigating (rare): READY only if you want, but we keep it conservative -> WAITING
-  const canSave = (!nav && !loading) || (hasPicked && !nav && !loading);
-  setSaveState(canSave ? "ready" : "waiting");
+  if (nav) { setSaveState("waiting"); return; }
+  if (hasPicked) { setSaveState("ready"); return; }
+  setSaveState(loading ? "waiting" : "ready");
 }
 
 const $ = (id)=>document.getElementById(id);
@@ -292,7 +290,7 @@ function renderBreadcrumb(){
     s.onclick = ()=>{
       if(idx < breadcrumb.length-1){
         breadcrumb = breadcrumb.slice(0, idx+1);
-        isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
+        isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
       }
     };
     el.appendChild(s);
@@ -305,46 +303,19 @@ let selectedRowEl = null;
 let isLoading = false;
 let isNavigating = false;
 
-function setSaveState(state){
-  const btn = $("pickerSave");
-  if (!btn) return;
-  if (state === "ready") {
-    btn.disabled = false;
-    btn.classList.remove("btn-wait");
-    btn.classList.add("btn-ready");
-  } else {
-    btn.disabled = true;
-    btn.classList.remove("btn-ready");
-    btn.classList.add("btn-wait");
-  }
-
-function updateSaveState(){
-  const btn = $("pickerSave");
-  if (!btn) return;
-  const nav = (typeof isNavigating !== "undefined" ? isNavigating : false);
-  const loading = (typeof isLoading !== "undefined" ? isLoading : false);
-  const hasPicked = !!(typeof pickedFolderId !== "undefined" && pickedFolderId);
-  // During navigation (dblclick/back/up/home/reload), always WAITING
-  // When not navigating and not loading: READY
-  // When loading but not navigating (rare): READY only if you want, but we keep it conservative -> WAITING
-  const canSave = (!nav && !loading) || (hasPicked && !nav && !loading);
-  setSaveState(canSave ? "ready" : "waiting");
-}
-}
-
-
 function openPicker(){
   pickedFolderId=null; pickedFolderName=null;
-  isLoading = true; updateSaveState();
+  isNavigating = true; isLoading = true; updateSaveState();
   $("picker").style.display="flex";
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
-  isNavigating = true; isLoading = true; updateSaveState(); loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
+  loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
 }
 function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id,pushHistory=true,from="enter"){
-  $("list").innerHTML=""; isLoading = true; updateSaveState();
+  isLoading = true; isNavigating = true; updateSaveState();
+  $("list").innerHTML="";
   selectedRowEl = null;
   if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; }
 
@@ -354,12 +325,11 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     if(!r.ok) throw new Error(j.error||r.statusText);
     if(pushHistory&&currentId&&from!=="back") historyStack.push(currentId);
     currentId=id||"root"; renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
-    // clear picked after folder open completes
-    pickedFolderId = null; pickedFolderName = null;
-    isLoading = false; isNavigating = false; updateSaveState();
     renderList(lastFolders);
     renderCurrentPath();
-  }catch(e){ log("❌ folder load: " + e.message); isLoading = false; isNavigating = false; updateSaveState(); }
+    pickedFolderId = null; pickedFolderName = null;
+    isLoading = false; isNavigating = false; updateSaveState();
+  }catch(e){ log("❌ folder load: "+e.message); isLoading = false; isNavigating = false; updateSaveState(); }
 }
   
 function renderList(folders){
@@ -380,8 +350,7 @@ function renderList(folders){
       selectedRowEl = left;
       pickedFolderId = f.id;
       pickedFolderName = f.name;
-      updateSaveState();
-isLoading = true; updateSaveState();
+      isNavigating = false; updateSaveState(); $("pickerSave").disabled=false;
       renderCurrentPath();
     };
     left.ondblclick = () => enterFolder(f.id,f.name);
@@ -410,9 +379,9 @@ async function deleteFolder(id,name){
   }
 }
 
-$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(prev,false,"back"); };
-$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
-$("btnReload").onclick=()=>isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(currentId,false,"reload");
+$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(prev,false,"back"); };
+$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
+$("btnReload").onclick=()=>isNavigating = true; isLoading = true; updateSaveState(); loadFolder(currentId,false,"reload");
 
 // 新規フォルダ
 async function createFolderCall(url,parentId,name){
@@ -429,7 +398,7 @@ $("btnNewFolder").onclick=async()=>{
   const pid=(!currentId||currentId==="undefined"||currentId==="null")?"root":currentId;
   let res=await createFolderCall(EP_CREATE_FOLDER,pid,name);
   if(res.status===404){ res=await createFolderCall(EP_CREATE_FOLDER_ALT,pid,name); }
-  if(res.ok){ log(`📁 作成: ${res.json.name}`); isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); await loadFolder(pid,false,"created"); }
+  if(res.ok){ log(`📁 作成: ${res.json.name}`); isNavigating = true; isLoading = true; updateSaveState(); await loadFolder(pid,false,"created"); }
   else { alert("作成失敗: "+res.status); }
 };
 
@@ -597,7 +566,7 @@ function goToRoot(){
   try{
     historyStack = [];
     breadcrumb = [{id:"root", name:"ルート"}];
-    isLoading = true; updateSaveState(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder("root", true, "home");
+    isNavigating = true; isLoading = true; updateSaveState(); loadFolder("root", true, "home");
   }catch(e){ log("❌ goToRoot: " + e.message); }
 }
 try{ document.getElementById("btnHome").onclick = goToRoot; }catch(e){}
