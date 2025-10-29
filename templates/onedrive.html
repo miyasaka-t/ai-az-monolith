@@ -264,7 +264,7 @@ function renderBreadcrumb(){
     s.onclick = ()=>{
       if(idx < breadcrumb.length-1){
         breadcrumb = breadcrumb.slice(0, idx+1);
-        setSaveState("waiting"); isLoading = true; loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
+        isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
       }
     };
     el.appendChild(s);
@@ -288,12 +288,21 @@ function setSaveState(state){
     btn.classList.remove("btn-ready");
     btn.classList.add("btn-wait");
   }
+
+function updateSaveState(){
+  const btn = $("pickerSave");
+  if (!btn) return;
+  // Rule: if a folder is explicitly picked, allow saving regardless of isLoading.
+  // Else, allow saving only when not loading.
+  const canSave = !!pickedFolderId || !isLoading;
+  setSaveState(canSave ? "ready" : "waiting");
+}
 }
 
 
 function openPicker(){
   pickedFolderId=null; pickedFolderName=null;
-  setSaveState("waiting"); isLoading = true;
+  isLoading = true; updateSaveState();
   $("picker").style.display="flex";
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
@@ -302,7 +311,7 @@ function openPicker(){
 function closePicker(){ $("picker").style.display="none"; }
 
 async function loadFolder(id,pushHistory=true,from="enter"){
-  $("list").innerHTML=""; setSaveState("waiting"); isLoading = true;
+  $("list").innerHTML=""; isLoading = true; updateSaveState();
   selectedRowEl = null;
   if(from!=="reload"){ filterWord=""; const fs=$("folderSearch"); if(fs) fs.value=""; }
 
@@ -314,7 +323,7 @@ async function loadFolder(id,pushHistory=true,from="enter"){
     currentId=id||"root"; renderBreadcrumb(); renderCurrentPath(); lastFolders = j.folders || [];
     // clear picked after folder open completes
     pickedFolderId = null; pickedFolderName = null;
-    isLoading = false; setSaveState("ready");
+    isLoading = false; updateSaveState();
     renderList(lastFolders);
     renderCurrentPath();
   }catch(e){ log("❌ folder load: "+e.message); }
@@ -338,7 +347,8 @@ function renderList(folders){
       selectedRowEl = left;
       pickedFolderId = f.id;
       pickedFolderName = f.name;
-      setSaveState("waiting"); isLoading = true;
+      updateSaveState();
+isLoading = true; updateSaveState();
       renderCurrentPath();
     };
     left.ondblclick = () => enterFolder(f.id,f.name);
@@ -367,9 +377,9 @@ async function deleteFolder(id,name){
   }
 }
 
-$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); setSaveState("waiting"); isLoading = true; loadFolder(prev,false,"back"); };
-$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); setSaveState("waiting"); isLoading = true; loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
-$("btnReload").onclick=()=>setSaveState("waiting"); isLoading = true; loadFolder(currentId,false,"reload");
+$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); isLoading = true; updateSaveState(); loadFolder(prev,false,"back"); };
+$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
+$("btnReload").onclick=()=>isLoading = true; updateSaveState(); loadFolder(currentId,false,"reload");
 
 // 新規フォルダ
 async function createFolderCall(url,parentId,name){
@@ -386,7 +396,7 @@ $("btnNewFolder").onclick=async()=>{
   const pid=(!currentId||currentId==="undefined"||currentId==="null")?"root":currentId;
   let res=await createFolderCall(EP_CREATE_FOLDER,pid,name);
   if(res.status===404){ res=await createFolderCall(EP_CREATE_FOLDER_ALT,pid,name); }
-  if(res.ok){ log(`📁 作成: ${res.json.name}`); setSaveState("waiting"); isLoading = true; await loadFolder(pid,false,"created"); }
+  if(res.ok){ log(`📁 作成: ${res.json.name}`); isLoading = true; updateSaveState(); await loadFolder(pid,false,"created"); }
   else { alert("作成失敗: "+res.status); }
 };
 
@@ -554,7 +564,7 @@ function goToRoot(){
   try{
     historyStack = [];
     breadcrumb = [{id:"root", name:"ルート"}];
-    setSaveState("waiting"); isLoading = true; loadFolder("root", true, "home");
+    isLoading = true; updateSaveState(); loadFolder("root", true, "home");
   }catch(e){ log("❌ goToRoot: " + e.message); }
 }
 try{ document.getElementById("btnHome").onclick = goToRoot; }catch(e){}
