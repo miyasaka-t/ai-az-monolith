@@ -1,4 +1,4 @@
-import os, re, json, time, base64, mimetypes, tempfile
+import os, re, json, time, base64, mimetypes, tempfile, traceback
 from uuid import uuid4
 from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
@@ -685,6 +685,8 @@ def tickets_create_multipart():
             "firstAllowedKind": made_first_allowed_kind
         }})
     except Exception as e:
+        print("❌ Error in /tickets/create-multipart:", e)
+        traceback.print_exc()  # ← スタックトレースを標準出力へ
         return jsonify({"error": str(e)}), 400
 
 # --- Tickets: peek
