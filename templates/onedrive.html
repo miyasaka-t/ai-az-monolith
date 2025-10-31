@@ -71,6 +71,41 @@
 #pickerSave.btn-wait { opacity: .5; cursor: not-allowed; filter: grayscale(0.3); }
 #pickerSave.btn-ready { opacity: 1; cursor: pointer; }
 
+
+  /* --- Loading UI (B plan): skeleton rows & overlay spinner --- */
+  #loadingOverlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    background: rgba(255,255,255,0.6);
+    z-index: 5;
+  }
+  #loadingOverlay.show { display: flex; }
+  #loadingOverlay .spinner {
+    width: 30px; height: 30px;
+    border: 3px solid #ccc;
+    border-top-color: #1e90ff;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin-bottom: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .skeleton-row {
+    height: 24px;
+    background: linear-gradient(90deg, #eee, #f8f8f8, #eee);
+    background-size: 200px 100%;
+    border-radius: 6px;
+    margin: 6px 0;
+    animation: shimmer 1.2s infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: -200px 0; }
+    100% { background-position: 200px 0; }
+  }
+
 </style>
 
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
@@ -101,6 +136,8 @@
 
 <!-- 自前フォルダピッカー -->
 <div id="picker" class="picker-backdrop" style="display:none" role="dialog" aria-modal="true">
+<div id="loadingOverlay"><div class="spinner"></div><p>読み込み中...</p></div>
+
   <div class="picker-panel">
     <div class="picker-head">
       <div class="picker-title">保存先を選択</div>
@@ -641,3 +678,130 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   }
 })();
 </script>
+
+
+<script>
+// === B plan: show modal immediately, but keep list/breadcrumb hidden with loading skeleton & overlay ===
+(function(){
+  // Utilities for loading UI
+  function showLoadingUI() {
+    try {
+      var overlay = document.getElementById("loadingOverlay");
+      if (overlay) overlay.classList.add("show");
+      var list = document.getElementById("list");
+      if (list) {
+        var rows = new Array(8).fill(0).map(function(){ return '<div class="skeleton-row"></div>'; }).join('');
+        list.innerHTML = rows;
+      }
+    } catch(e) { /* no-op */ }
+  }
+  function hideLoadingUI() {
+    try {
+      var overlay = document.getElementById("loadingOverlay");
+      if (overlay) overlay.classList.remove("show");
+    } catch(e) { /* no-op */ }
+  }
+
+  // Keep a reference to original functions if they exist
+  var _orig_openPicker = (typeof openPicker === "function") ? openPicker : null;
+  var _orig_loadFolder = (typeof loadFolder === "function") ? loadFolder : null;
+  var _orig_setPickedHint = (typeof setPickedHint === "function") ? setPickedHint : function(){};
+  var _orig_renderBreadcrumb = (typeof renderBreadcrumb === "function") ? renderBreadcrumb : function(){};
+  var _orig_renderCurrentPath = (typeof renderCurrentPath === "function") ? renderCurrentPath : function(){};
+  var _orig_updateSaveState = (typeof updateSaveState === "function") ? updateSaveState : function(){};
+
+  // Override setPickedHint to no-op while loading (avoid "保存先: ルート" flicker)
+  window.setPickedHint = function(){
+    try {
+      if (typeof isLoading !== "undefined" && isLoading) return; // defer while loading
+    } catch(e) {}
+    return _orig_setPickedHint();
+  };
+
+  // Override openPicker: show modal immediately but don't call setPickedHint yet; show loading UI
+  window.openPicker = function(){
+    try {
+      if (typeof pickedFolderId !== "undefined") { pickedFolderId = null; }
+      if (typeof pickedFolderName !== "undefined") { pickedFolderName = null; }
+      if (typeof isNavigating !== "undefined") { isNavigating = true; }
+      if (typeof isLoading !== "undefined") { isLoading = true; }
+      _orig_updateSaveState();
+    } catch(e){}
+    // show modal outer frame immediately
+    try { document.getElementById("picker").style.display = "flex"; } catch(e){}
+    showLoadingUI();
+    // Reset history/breadcrumb to root silently (UI is hidden via CSS in this build)
+    try {
+      if (typeof historyStack !== "undefined") historyStack = [];
+      if (typeof breadcrumb !== "undefined") breadcrumb = [{id:"root", name:"ルート"}];
+    } catch(e){}
+    // Start loading initial folder (keep same initial ID as existing implementation if available)
+    var initialId = "root";
+    try {
+      // Try to extract the initial folder ID from existing code by sniffing a known element/value if present
+      // Fallback to a commonly used ID if defined on window.INIT_FOLDER_ID
+      if (typeof INIT_FOLDER_ID !== "undefined" && INIT_FOLDER_ID) {
+        initialId = INIT_FOLDER_ID;
+      } else {
+        // If currentId is meaningful, prefer it; else keep root (will be replaced soon anyway)
+        if (typeof currentId !== "undefined" && currentId && currentId !== "root") initialId = currentId;
+      }
+    } catch(e){}
+    // If the original openPicker had a hard-coded ID, we cannot detect reliably here; instead just call our loadFolder override below.
+    window.loadFolder(initialId, false, "open");
+  };
+
+  // Override loadFolder: show skeleton during fetch; only after success, render list then setPickedHint
+  window.loadFolder = async function(id, pushHistory, from){
+    try {
+      if (typeof isLoading !== "undefined") isLoading = true;
+      if (typeof isNavigating !== "undefined") isNavigating = true;
+      _orig_updateSaveState();
+    } catch(e){}
+    showLoadingUI();
+    var ok = false, j = null, err = null;
+    try {
+      const url = (typeof EP_LIST_FOLDERS !== "undefined" ? EP_LIST_FOLDERS : "/api/drive/folders") + "?parentId=" + encodeURIComponent(id || "root");
+      const r = await fetch(url);
+      j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText || "folder load failed");
+      ok = true;
+    } catch(e) {
+      err = e;
+    }
+    try {
+      if (ok) {
+        // Update navigation state and render list only now
+        if (typeof currentId !== "undefined") currentId = id || "root";
+        if (typeof lastFolders !== "undefined") lastFolders = (j && j.folders) || [];
+        if (typeof renderList === "function") renderList(lastFolders);
+        if (typeof renderCurrentPath === "function") _orig_renderCurrentPath(); // breadcrumb/path UI may be hidden by CSS in this build
+        if (typeof pickedFolderId !== "undefined") pickedFolderId = null;
+        if (typeof pickedFolderName !== "undefined") pickedFolderName = null;
+        // mark loading done before hint update
+        if (typeof isLoading !== "undefined") isLoading = false;
+        if (typeof isNavigating !== "undefined") isNavigating = false;
+        hideLoadingUI();
+        _orig_updateSaveState();
+        _orig_setPickedHint();
+      } else {
+        // on error
+        if (typeof console !== "undefined") console.warn("folder load error:", err && err.message);
+        if (typeof isLoading !== "undefined") isLoading = false;
+        if (typeof isNavigating !== "undefined") isNavigating = false;
+        hideLoadingUI();
+        _orig_updateSaveState();
+        _orig_setPickedHint();
+      }
+    } catch(e) {
+      // fail-safe
+      if (typeof isLoading !== "undefined") isLoading = false;
+      if (typeof isNavigating !== "undefined") isNavigating = false;
+      hideLoadingUI();
+      _orig_updateSaveState();
+      _orig_setPickedHint();
+    }
+  };
+})();
+</script>
+
