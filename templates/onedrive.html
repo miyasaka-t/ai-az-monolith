@@ -775,7 +775,8 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         if (typeof currentId !== "undefined") currentId = id || "root";
         if (typeof lastFolders !== "undefined") lastFolders = (j && j.folders) || [];
         if (typeof renderList === "function") renderList(lastFolders);
-        if (typeof renderCurrentPath === "function") _orig_renderCurrentPath(); // breadcrumb/path UI may be hidden by CSS in this build
+        if (typeof renderCurrentPath === "function") _orig_renderCurrentPath();
+        if (typeof _orig_renderBreadcrumb === "function") _orig_renderBreadcrumb();  // update Home button state // breadcrumb/path UI may be hidden by CSS in this build
         if (typeof pickedFolderId !== "undefined") pickedFolderId = null;
         if (typeof pickedFolderName !== "undefined") pickedFolderName = null;
         // mark loading done before hint update
@@ -804,4 +805,3 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   };
 })();
 </script>
-
