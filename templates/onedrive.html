@@ -186,6 +186,12 @@ const EML_BASE_INIT  = (q.get("eml")   || "Report").trim();
 const ATTACH_Q = (q.get("attach") ?? q.get("excel") ?? q.get("xlsx") ?? q.get("name_xlsx") ?? "").trim();
 const XLSX_BASE_INIT = ATTACH_Q || "Attachment";
 
+let HAS_ATTACH = false;
+try {
+  HAS_ATTACH = q.has("attach");
+} catch (_) {
+  HAS_ATTACH = false;
+}
 $("emlBase").value  = EML_BASE_INIT;
 $("xlsxBase").value = XLSX_BASE_INIT;
 
@@ -209,6 +215,13 @@ const GITHUB_SAVE_NAME = "runmacro_onedrive.vbs";
   $("nm_xlsx_hint").textContent = "保存時は「" + $("xlsxBase").value + " + 添付の拡張子」を強制付与";
 })();
 
+// 添付UIの出し分け（attach= が無いときは非表示）
+(function toggleAttachUI(){
+  try{
+    const col = document.getElementById("xlsxBase")?.closest(".col");
+    if (col) col.style.display = (HAS_ATTACH ? "" : "none");
+  }catch(e){ /* no-op */ }
+})();
 // ===== フォルダ検索（Ctrl+F風） =====
 let lastFolders = [];
 let filterWord = "";
@@ -472,21 +485,28 @@ async function doUpload(){
     // 0) まず .msg の添付抽出（非消費）→ Excel 含有チェック
     let extractedTickets = [];
     let hasExcelInMsg = false;
-    if (want_msg) {
+    if (want_msg && HAS_ATTACH) {
       try{
         const single = SINGLE_ATTACH && !ALL_ATTACH; // 単一指定時
         extractedTickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
         hasExcelInMsg = extractedTickets.some(t => (t.kind||"") === "excel");
         if (!extractedTickets.length) {
-          log("⚠️ 添付抽出なし");
+          log("ℹ️ 添付なし（想定内）");
         } else {
           if (single) log("→ 単一添付モード pick=first / limit=1");
           if (KINDS)  log("→ kinds="+KINDS);
           log("抽出件数: "+extractedTickets.length+ (hasExcelInMsg?"（Excel含む）":""));
         }
       }catch(e){
-        log("⚠️ msg-to-attachment-tickets エラー: "+e.message);
-      }
+        try{
+        const m = String(e && e.message || "");
+        if (m.includes("no_allowed_attachment_found")) {
+          log("ℹ️ 添付なし（想定内）");
+        } else {
+          log("⚠️ msg-to-attachment-tickets エラー: " + m);
+        }
+      }catch(_){ log("⚠️ msg-to-attachment-tickets エラー（解析失敗）"); }
+}
     }
 
     // 1) .eml 保存
