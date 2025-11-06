@@ -1713,24 +1713,35 @@ def extract_pdf_tables():
         payload = {"ok": False, "error": f"extract_failed: {e}", "filename": fname}
         return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
 
+
 # ===============================
-# ========== EML 編集API =========
+# ========== EML 編集API (fixed) =
 # ===============================
+from flask import request, jsonify
+import base64, mimetypes, tempfile, os, traceback
 from email import policy
 from email.parser import BytesParser
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
-import base64, mimetypes, tempfile, os, re, traceback
 import html as _html
+import re
+
+# 改行入りヘッダーを安全に正規化
+def _clean_hdr(v: str) -> str:
+    try:
+        return re.sub(r'[\r\n]+', ' ', (v or '')).strip()
+    except Exception:
+        return (v or '').replace('\r',' ').replace('\n',' ').strip()
 
 def _preview_from_eml_bytes(b: bytes) -> dict:
-    msg = BytesParser(policy=policy.default).parsebytes(b)
-    subject = msg.get('Subject', '') or ''
-    from_ = msg.get('From', '') or ''
-    to_   = msg.get('To', '') or ''
-    cc_   = msg.get('Cc', '') or ''
-    bcc_  = msg.get('Bcc', '') or ''
-    date_ = msg.get('Date', '') or ''
+    # 壊れたヘッダーに寛容
+    msg = BytesParser(policy=policy.compat32).parsebytes(b)
+    subject = _clean_hdr(msg.get('Subject', '') or '')
+    from_   = _clean_hdr(msg.get('From', '') or '')
+    to_     = _clean_hdr(msg.get('To', '') or '')
+    cc_     = _clean_hdr(msg.get('Cc', '') or '')
+    bcc_    = _clean_hdr(msg.get('Bcc', '') or '')
+    date_   = _clean_hdr(msg.get('Date', '') or '')
 
     body_text = ''
     body_html = ''
@@ -1787,16 +1798,16 @@ def _preview_from_msg_bytes(b: bytes) -> dict:
         with open(p, 'wb') as f:
             f.write(b)
         m = extract_msg.Message(p)
-        subject = m.subject or ''
-        body_text = (m.body or '')
-        body_html = (m.htmlBody or '')
-        from_ = getattr(m, 'sender', '') or ''
-        to_   = getattr(m, 'to', '') or ''
-        cc_   = getattr(m, 'cc', '') or ''
-        bcc_  = getattr(m, 'bcc', '') or ''
-        date_ = getattr(m, 'date', '') or ''
+        subject = _clean_hdr(getattr(m, 'subject', '') or '')
+        body_text = (getattr(m, 'body', '') or '')
+        body_html = (getattr(m, 'htmlBody', '') or '')
+        from_ = _clean_hdr(getattr(m, 'sender', '') or '')
+        to_   = _clean_hdr(getattr(m, 'to', '') or '')
+        cc_   = _clean_hdr(getattr(m, 'cc', '') or '')
+        bcc_  = _clean_hdr(getattr(m, 'bcc', '') or '')
+        date_ = _clean_hdr(getattr(m, 'date', '') or '')
         atts = []
-        for a in m.attachments or []:
+        for a in (getattr(m, 'attachments', None) or []):
             name = getattr(a, 'longFilename', '') or getattr(a, 'shortFilename', '') or 'attachment'
             data = getattr(a, 'data', None)
             if not data:
@@ -1815,7 +1826,7 @@ def api_mail_preview_from_ticket():
     try:
         ticket = request.args.get('ticket')
         if not ticket:
-            return jsonify({'error': 'missing ticket'}), 400
+            return jsonify({'ok': False, 'error': 'missing ticket'}), 200
         meta = redeem_ticket(ticket, consume=False)
         file_name, b, mime = materialize_bytes(meta)
         mime = (mime or '').lower()
@@ -1825,10 +1836,10 @@ def api_mail_preview_from_ticket():
             out = _preview_from_eml_bytes(b)
         return jsonify({'ok': True, **out, 'sourceFileName': file_name})
     except KeyError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({'ok': False, 'error': str(e)}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 400
+        return jsonify({'ok': False, 'error': str(e)}), 200
 
 @app.post('/api/mail/compose-from-ticket')
 def api_mail_compose_from_ticket():
@@ -1865,13 +1876,13 @@ def api_mail_compose_from_ticket():
                     with open(p, 'wb') as f:
                         f.write(orig_bytes)
                     m = extract_msg.Message(p)
-                    from_addr = getattr(m, 'sender', '') or ''
-                    to_addr   = getattr(m, 'to', '') or ''
-                    cc_addr   = getattr(m, 'cc', '') or ''
-                    bcc_addr  = getattr(m, 'bcc', '') or ''
-                    date_hdr  = getattr(m, 'date', '') or ''
+                    from_addr = _clean_hdr(getattr(m, 'sender', '') or '')
+                    to_addr   = _clean_hdr(getattr(m, 'to', '') or '')
+                    cc_addr   = _clean_hdr(getattr(m, 'cc', '') or '')
+                    bcc_addr  = _clean_hdr(getattr(m, 'bcc', '') or '')
+                    date_hdr  = _clean_hdr(getattr(m, 'date', '') or '')
                     if keep_atts:
-                        for a in m.attachments or []:
+                        for a in (getattr(m, 'attachments', None) or []):
                             name = getattr(a, 'longFilename', '') or getattr(a, 'shortFilename', '') or 'attachment'
                             data = getattr(a, 'data', None)
                             if not data:
@@ -1879,12 +1890,12 @@ def api_mail_compose_from_ticket():
                             mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
                             orig_atts.append((name, mime, data))
             else:
-                em = BytesParser(policy=policy.default).parsebytes(orig_bytes)
-                from_addr = em.get('From', '') or ''
-                to_addr   = em.get('To', '') or ''
-                cc_addr   = em.get('Cc', '') or ''
-                bcc_addr  = em.get('Bcc', '') or ''
-                date_hdr  = em.get('Date', '') or ''
+                em = BytesParser(policy=policy.compat32).parsebytes(orig_bytes)
+                from_addr = _clean_hdr(em.get('From', '') or '')
+                to_addr   = _clean_hdr(em.get('To', '') or '')
+                cc_addr   = _clean_hdr(em.get('Cc', '') or '')
+                bcc_addr  = _clean_hdr(em.get('Bcc', '') or '')
+                date_hdr  = _clean_hdr(em.get('Date', '') or '')
                 if keep_atts:
                     for part in em.walk():
                         cd = part.get_content_disposition()
@@ -1897,17 +1908,22 @@ def api_mail_compose_from_ticket():
             pass
 
         new = EmailMessage()
-        if subject: new['Subject'] = subject
-        if from_addr: new['From'] = from_addr
-        if to_addr: new['To'] = to_addr
-        if cc_addr: new['Cc'] = cc_addr
-        if bcc_addr: new['Bcc'] = bcc_addr
+        if subject:
+            new['Subject'] = _clean_hdr(subject)
+        if from_addr:
+            new['From'] = _clean_hdr(from_addr)
+        if to_addr:
+            new['To'] = _clean_hdr(to_addr)
+        if cc_addr:
+            new['Cc'] = _clean_hdr(cc_addr)
+        if bcc_addr:
+            new['Bcc'] = _clean_hdr(bcc_addr)
 
         if regen or not date_hdr:
             new['Date'] = formatdate(localtime=True)
             new['Message-ID'] = make_msgid()
         else:
-            new['Date'] = date_hdr
+            new['Date'] = _clean_hdr(date_hdr)
             new['Message-ID'] = make_msgid()
 
         if body_text:
@@ -1915,7 +1931,8 @@ def api_mail_compose_from_ticket():
             if body_html:
                 new.add_alternative(body_html, subtype='html')
         else:
-            new.set_content(_html.unescape(re.sub(r'<[^>]+>', '', body_html)))
+            import re as _re2
+            new.set_content(_html.unescape(_re2.sub(r'<[^>]+>', '', body_html)))
             new.add_alternative(body_html, subtype='html')
 
         for fn, mime, data in orig_atts:
@@ -1940,3 +1957,4 @@ def api_mail_compose_from_ticket():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 400
+
