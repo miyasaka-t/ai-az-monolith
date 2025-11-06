@@ -547,7 +547,7 @@ async function doUpload(){
     }
 
     // 1) .eml 保存
-    if (want_eml) {
+    if (want_eml && !(typeof EML_ALREADY_UPLOADED !== 'undefined' && EML_ALREADY_UPLOADED)) {
       const t = T_EML || TICKET_SINGLE;
       log("→ eml upload as: " + emlName);
       const r = await uploadOne(EP_UPLOAD_ORG, t, emlName);
@@ -703,6 +703,12 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   }
 
   // Keep a reference to original functions if they exist
+  // Default initial folder ID (same as non-edit flow)
+  try {
+    if (typeof window.INIT_FOLDER_ID === 'undefined' || !window.INIT_FOLDER_ID) {
+      window.INIT_FOLDER_ID = "01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK";
+    }
+  } catch(e){}
   var _orig_openPicker = (typeof openPicker === "function") ? openPicker : null;
   var _orig_loadFolder = (typeof loadFolder === "function") ? loadFolder : null;
   var _orig_setPickedHint = (typeof setPickedHint === "function") ? setPickedHint : function(){};
@@ -772,6 +778,9 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     try {
       if (ok) {
         // Update navigation state and render list only now
+        if (pushHistory && typeof currentId !== "undefined" && currentId && from !== "back") {
+          try { if (typeof historyStack !== "undefined") historyStack.push(currentId); } catch(e){}
+        }
         if (typeof currentId !== "undefined") currentId = id || "root";
         if (typeof lastFolders !== "undefined") lastFolders = (j && j.folders) || [];
         if (typeof renderList === "function") renderList(lastFolders);
@@ -803,6 +812,54 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       _orig_setPickedHint();
     }
   };
+  // Wire picker toolbar controls (Back / Up / Home / Reload)
+  (function wirePickerToolbar(){
+    try{
+      var back = document.getElementById('btnBack');
+      if (back && !back.__wired) {
+        back.__wired = true;
+        back.onclick = function(){
+          try {
+            var prev = (typeof historyStack !== 'undefined' && historyStack.length) ? historyStack.pop() : null;
+            var target = prev || 'root';
+            if (typeof loadFolder === 'function') loadFolder(target, false, 'back');
+          } catch(e){}
+        };
+      }
+      var up = document.getElementById('btnUp');
+      if (up && !up.__wired) {
+        up.__wired = true;
+        up.onclick = function(){
+          try {
+            if (typeof breadcrumb !== 'undefined' && breadcrumb.length > 1) {
+              breadcrumb.pop();
+              var parentId = breadcrumb[breadcrumb.length-1].id;
+              if (typeof loadFolder === 'function') loadFolder(parentId, true, 'up');
+            }
+          } catch(e){}
+        };
+      }
+      var home = document.getElementById('btnHome');
+      if (home && !home.__wired) {
+        home.__wired = true;
+        home.onclick = function(){
+          try {
+            if (typeof historyStack !== 'undefined') historyStack = [];
+            if (typeof breadcrumb !== 'undefined') breadcrumb = [{id:'root', name:'ルート'}];
+            if (typeof loadFolder === 'function') loadFolder('root', false, 'home');
+          } catch(e){}
+        };
+      }
+      var reloadBtn = document.getElementById('btnReload');
+      if (reloadBtn && !reloadBtn.__wired) {
+        reloadBtn.__wired = true;
+        reloadBtn.onclick = function(){
+          try { if (typeof loadFolder === 'function') loadFolder((typeof currentId!=='undefined' && currentId) ? currentId : 'root', false, 'reload'); } catch(e){}
+        };
+      }
+    }catch(e){}
+  })();
+
 })();
 </script>
 
@@ -990,118 +1047,40 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     if (typeof window.doUpload !== 'function') return;
     window.__orig_doUpload__ = window.doUpload;
     window.doUpload = function(){
-      try {
-        if (window.EDITED_TICKET_EML) {
-          // We expect uploadOne(endpoint, ticket, fileName) + EP_UPLOAD_ORG to exist in the page
-          var emlBaseEl = document.getElementById('emlBase');
-          var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
-          var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
-          return Promise.resolve()
-            .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
-            .then(function(r){
-              if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
-              window.EDITED_TICKET_EML = null;
-              window.EDITED_FILE_NAME = null;
-              if (typeof setPickedHint === 'function') setPickedHint();
-              return;
-            })
-            .catch(function(e){
-              console.error(e);
-              if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
-              throw e;
-            });
-        }
-      } catch(e){ console.error(e); }
-      // Fallback to original behavior when no edited ticket
+      // If we have an edited EML, upload it first, then continue with the normal pipeline
+      if (window.EDITED_TICKET_EML) {
+        var emlBaseEl = document.getElementById('emlBase');
+        var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
+        var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
+        return Promise.resolve()
+          .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
+          .then(function(r){
+            if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
+            // Set a guard so original doUpload won't save EML again
+            window.EML_ALREADY_UPLOADED = true;
+            // Clear edited variables to avoid reuse
+            window.EDITED_TICKET_EML = null;
+            window.EDITED_FILE_NAME = null;
+          })
+          .then(()=>{
+            try{ if (typeof setPickedHint === 'function') setPickedHint(); }catch(_e){}
+            // Continue with the original pipeline (msg, attachments, VBS, etc.)
+            return window.__orig_doUpload__.apply(this, arguments);
+          })
+          .finally(function(){
+            // Remove guard after run
+            try{ window.EML_ALREADY_UPLOADED = false; }catch(_e){}
+          })
+          .catch(function(e){
+            console.error(e);
+            if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
+            throw e;
+          });
+      }
+      // No edited ticket: normal behavior
       return window.__orig_doUpload__.apply(this, arguments);
     };
-  })();
-})();
-</script><!-- eml-front-patch v3 1762403441 -->
-
-<script>
-(function(){
-  if (window.__EML_FRONT_PATCH_V3__) return;
-  window.__EML_FRONT_PATCH_V3__ = '1762403441';
-
-  
-  // ---------- (1) RFC 2047 decoder + subject auto-fix ----------
-  (function(){
-    // Safe RFC 2047 decoder for '=?charset?b|q?encoded?=' sequences (multiple segments supported)
-    function _decode2047(input){
-      try{ if(input==null) return ""; }catch(_e){ return ""; }
-      var str = String(input);
-      var re = /=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/g;
-      return str.replace(re, function(_, charset, enc, data){
-        try{
-          enc = (enc||"").toUpperCase();
-          charset = (charset||"utf-8").toLowerCase();
-          var bytes;
-
-          if (enc === "B"){
-            // Base64
-            try{
-              var bin = atob(data.replace(/\s+/g,''));
-              bytes = new Uint8Array(bin.length);
-              for (var i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
-            }catch(e){ return _; }
-          } else {
-            // Quoted-Printable (RFC 2047 variant: underscores are spaces)
-            try{
-              var q = data.replace(/_/g, ' ');
-              var arr = [];
-              for (var i=0;i<q.length;i++){
-                var ch = q[i];
-                if (ch === '=' && i+2 < q.length && /[0-9A-Fa-f]{2}/.test(q.slice(i+1,i+3))){
-                  arr.push(parseInt(q.slice(i+1,i+3),16));
-                  i+=2;
-                } else {
-                  arr.push(ch.charCodeAt(0));
-                }
-              }
-              bytes = new Uint8Array(arr);
-            }catch(e){ return _; }
-          }
-
-          // Try TextDecoder, fallback to UTF-8 if unsupported
-          try{
-            if (typeof TextDecoder !== 'undefined'){
-              try {
-                return new TextDecoder(charset).decode(bytes);
-              } catch(_e1){
-                // fallback to utf-8
-                return new TextDecoder('utf-8').decode(bytes);
-              }
-            }
-          }catch(_e2){}
-          // Very old browsers: naive fallback
-          var r = ""; for (var j=0;j<bytes.length;j++) r += String.fromCharCode(bytes[j]); return r;
-        }catch(_fatal){ return _; }
-      });
-    }
-
-    // Expose safely (avoid clobbering if already present)
-    try { if (!window._decode2047) window._decode2047 = _decode2047; } catch(_e){}
-
-    // Poll a few times after load to decode the subject if it's encoded-word
-    function _autoDecodeSubject(){
-      var tries = 0;
-      var iv = setInterval(function(){
-        try{
-          tries++;
-          var el = document.getElementById('mailSubject');
-          if (el && typeof el.value === 'string' && /=\?[^?]+\?[bBqQ]\?[^?]+\?=/.test(el.value)){
-            var dec = _decode2047(el.value);
-            if (dec && dec !== el.value) el.value = dec;
-          }
-          if (tries > 40) clearInterval(iv); // ~20s at 500ms
-        }catch(_e){ clearInterval(iv); }
-      }, 500);
-    }
-    if (document.readyState === 'complete'){ _autoDecodeSubject(); }
-    else { window.addEventListener('load', _autoDecodeSubject, {once:true}); }
-  })();
-// ---------- (2) Picker initial folder: align "編集内容で保存" with normal flow ----------
+  })();  // ---------- (2) Picker initial folder: align "編集内容で保存" with normal flow ----------
   // Remember last folder id when possible
   window.DEFAULT_START_FOLDER = window.DEFAULT_START_FOLDER || null;
 
@@ -1209,58 +1188,3 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   })();
 })();
 </script>
-
-  <script>
-  (function(){
-    if (window.__OPENPICKER_FORCE_PATCH__) return;
-    window.__OPENPICKER_FORCE_PATCH__ = '1';
-
-    function getInitialFolderId(){
-      try{
-        if (typeof window.INIT_FOLDER_ID === 'string' && window.INIT_FOLDER_ID.trim()) return window.INIT_FOLDER_ID.trim();
-      }catch(_e){}
-      try{
-        if (typeof window.DEFAULT_START_FOLDER === 'string' && window.DEFAULT_START_FOLDER.trim()) return window.DEFAULT_START_FOLDER.trim();
-      }catch(_e){}
-      try{
-        if (typeof window.currentId === 'string' && window.currentId.trim()) return window.currentId.trim();
-      }catch(_e){}
-      try{
-        if (typeof window.PICKED_FOLDER_ID === 'string' && window.PICKED_FOLDER_ID.trim()) return window.PICKED_FOLDER_ID.trim();
-      }catch(_e){}
-      // Fallback to your known default fixed folder id if present in page
-      try{
-        var FIXED = '01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK';
-        if (FIXED && FIXED.length > 10) return FIXED;
-      }catch(_e){}
-      return 'root';
-    }
-
-    // Capture original
-    var __orig_openPicker__ = window.openPicker;
-    if (typeof __orig_openPicker__ !== 'function') return;
-
-    window.openPicker = function(){
-      // decide initial ID *before* opening
-      var initialId = getInitialFolderId();
-      try { window.INIT_FOLDER_ID = initialId; } catch(_e){}
-
-      // open original picker
-      var ret = __orig_openPicker__.apply(this, arguments);
-
-      // after picker UI attaches, force-load target folder
-      try{
-        setTimeout(function(){
-          try {
-            if (typeof window.loadFolder === 'function'){
-              window.historyStack = []; // start clean
-              window.loadFolder(initialId, false, 'open_force');
-            }
-          }catch(_e){}
-        }, 0);
-      }catch(_e){}
-
-      return ret;
-    };
-  })();
-  </script>
