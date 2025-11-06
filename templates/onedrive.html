@@ -501,27 +501,7 @@ async function uploadFromUrl(url, folderId, fileName){
 
 // ===== すべて保存（EML / MSG / 添付） + 条件付き GitHub保存 =====
 async function doUpload(){
-  
-// --- 追加: 編集版チケットがあればそれ”だけ”保存して終了 ---
-if (window.EDITED_TICKET_EML) {
-  try {
-    const emlBase = (document.getElementById('emlBase')?.value || 'Report').trim();
-    const editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
-    // Expected helper: uploadOne(endpoint, ticket, fileName) and constant: EP_UPLOAD_ORG
-    const r = await uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName);
-    if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
-    window.EDITED_TICKET_EML = null;
-    window.EDITED_FILE_NAME = null;
-    if (typeof setPickedHint === 'function') setPickedHint();
-    return; // ここで完了。他の元チケット保存ロジックは実行しない
-  } catch(e) {
-    console.error(e);
-    if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
-    // フォールバックは行わない（明示的に失敗とする）
-    throw e;
-  }
-}
-const targetFolderId = pickedFolderId || currentId || "root";
+  const targetFolderId = pickedFolderId || currentId || "root";
   const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
   setPickedHint();
 
@@ -886,46 +866,155 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   }
 
   async function composeAndUpload(){
-  try {
-    if (elStatus) elStatus.textContent = '再組み立て中...';
-    const payload = {
-      ticket: T_EML,
-      subject: elSubj ? (elSubj.value || '') : '',
-      body_html: elHtml ? (elHtml.innerHTML || '') : '',
-      body_text: elText ? (elText.value || '') : '',
-      keep_attachments: true,
-      regenerate_date: true,
-      suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
-    };
-    fetch('/api/mail/compose-from-ticket', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    })
-    .then(r => r.json())
-    .then(j => {
-      if (!j.ok) throw new Error(j.error || 'compose failed');
-      window.EDITED_TICKET_EML = j.ticket_eml;
-      window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-      if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
-      if (typeof openPicker === 'function') {
-        openPicker();
-      } else {
-        const btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
-        const cand = btns.find(b => (b.textContent||'').includes('編集せずに保存') || (b.textContent||'').includes('保存先を選ぶ'));
-        cand?.click();
-      }
-    })
-    .catch(e => {
+    try{
+      elStatus.textContent = '再組み立て中...';
+      const payload = {
+        ticket: T_EML,
+        subject: elSubj.value || '',
+        body_html: elHtml.innerHTML || '',
+        body_text: elText.value || '',
+        keep_attachments: true,
+        regenerate_date: true,
+        suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
+      };
+      const r = await fetch('/api/mail/compose-from-ticket', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if(!j.ok){ throw new Error(j.error||'compose failed'); }
+      const composedTicket = j.ticket_eml;
+      elStatus.textContent = '再組み立てOK → 保存中...';
+
+      const fd = new FormData();
+      fd.append('ticket', composedTicket);
+      fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
+      if(j.suggestedFileName){ fd.append('fileName', j.suggestedFileName); }
+      const r2 = await fetch('/api/upload', { method:'POST', body: fd });
+      const j2 = await r2.json();
+      if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
+      elStatus.textContent = '保存完了';
+      if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
+    }catch(e){
       console.error(e);
-      if (elStatus) elStatus.textContent = '保存失敗';
-      alert('保存に失敗しました: ' + e.message);
-    });
-  } catch(e) {
-    console.error(e);
-    if (elStatus) elStatus.textContent = '保存失敗';
-    alert('保存に失敗しました: ' + e.message);
+      elStatus.textContent = '保存失敗';
+      alert('保存に失敗しました: '+e.message);
+    }
   }
-}
+
+  document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload);
+  loadPreview();
+})();
+</script>
+
+<!-- eml-final-patch version 1762397407 -->
+<script>
+(function(){
+  if (window.__emlFinalPatch__) return;
+  window.__emlFinalPatch__ = "1762397407";
+
+  // Visible version mark
+  try {
+    var v = document.createElement('div');
+    v.style.cssText = 'margin-top:6px;font-size:11px;color:#666;';
+    v.textContent = 'EML Final Patch: 1762397407';
+    (document.body || document.documentElement).appendChild(v);
+  } catch(_e) { }
+
+  var qs = new URLSearchParams(location.search);
+  var T_EML = qs.get('ticket_eml') || qs.get('ticket') || '';
+
+  var elStatus = document.getElementById('mailEditorStatus');
+  var elSubj   = document.getElementById('mailSubject');
+  var elHtml   = document.getElementById('htmlPane');
+  var elText   = document.getElementById('textPane');
+  var btnSave  = document.getElementById('btnComposeSave');
+
+  function setStatus(t){ if (elStatus) elStatus.textContent = t; }
+
+  // Define composeAndUpload in a safe, non-async way
+  window.composeAndUpload = function(){
+    try {
+      setStatus('再組み立て中...');
+      var payload = {
+        ticket: T_EML,
+        subject: elSubj ? (elSubj.value || '') : '',
+        body_html: elHtml ? (elHtml.innerHTML || '') : '',
+        body_text: elText ? (elText.value || '') : '',
+        keep_attachments: true,
+        regenerate_date: true,
+        suggestedBaseName: (window.inputBaseName && window.inputBaseName.value ? window.inputBaseName.value.trim() : undefined)
+      };
+      fetch('/api/mail/compose-from-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
+        // Stash edited ticket for later upload
+        window.EDITED_TICKET_EML = j.ticket_eml;
+        window.EDITED_FILE_NAME  = j.suggestedFileName || '';
+        setStatus('編集版の保存先を選択してください...');
+        // Open existing picker (same UX as the original button)
+        if (typeof window.openPicker === 'function') {
+          window.openPicker();
+        } else {
+          // Try click a visible button with the original/new label
+          var btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
+          var cand = btns.find(function(b){ var t=(b.textContent||''); return t.indexOf('編集せずに保存')>=0 || t.indexOf('保存先を選ぶ')>=0; });
+          if (cand) try { cand.click(); } catch(_e){}
+        }
+      })
+      .catch(function(e){
+        console.error(e);
+        setStatus('保存失敗');
+        alert('保存に失敗しました: ' + e.message);
+      });
+    } catch(e) {
+      console.error(e);
+      setStatus('保存失敗');
+      alert('保存に失敗しました: ' + e.message);
+    }
+  };
+
+  // Hook button if present
+  if (btnSave) {
+    try { btnSave.removeEventListener('click', window.composeAndUpload); } catch(_e){}
+    btnSave.addEventListener('click', window.composeAndUpload);
+  }
+
+  // Wrap doUpload so that if an edited ticket exists, we upload it and return early.
+  (function wrapDoUpload(){
+    if (window.__orig_doUpload__) return; // already wrapped
+    if (typeof window.doUpload !== 'function') return;
+    window.__orig_doUpload__ = window.doUpload;
+    window.doUpload = function(){
+      try {
+        if (window.EDITED_TICKET_EML) {
+          // We expect uploadOne(endpoint, ticket, fileName) + EP_UPLOAD_ORG to exist in the page
+          var emlBaseEl = document.getElementById('emlBase');
+          var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
+          var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
+          return Promise.resolve()
+            .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
+            .then(function(r){
+              if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
+              window.EDITED_TICKET_EML = null;
+              window.EDITED_FILE_NAME = null;
+              if (typeof setPickedHint === 'function') setPickedHint();
+              return;
+            })
+            .catch(function(e){
+              console.error(e);
+              if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
+              throw e;
+            });
+        }
+      } catch(e){ console.error(e); }
+      // Fallback to original behavior when no edited ticket
+      return window.__orig_doUpload__.apply(this, arguments);
+    };
+  })();
 })();
 </script>
