@@ -6,6 +6,7 @@ import requests
 # 追加: EML生成用
 from email.message import EmailMessage
 from email.utils import formatdate
+from email.header import decode_header, make_header
 import html as _html
 
 # ===== excel_api.py 由来の追加 import（仕様変更なしで合体） =====
@@ -187,7 +188,7 @@ def _text_to_html(s: str) -> str:
         return "<p></p>"
     t = (_html.escape(s or "").replace("\r\n", "\n").replace("\r", "\n"))
     paras = t.split("\n\n")
-    return "".join(f"<p>{p.replace('\n','<br>')}</p>" for p in paras) or "<p></p>"
+    return "".join("<p>" + p.replace("\n","<br>") + "</p>" for p in paras) or "<p></p>"
 
 def build_eml_bytes(subject, from_addr, to_addrs, body_text="", body_html=None, date_str=None) -> bytes:
     msg = EmailMessage()
@@ -1722,11 +1723,22 @@ import base64, mimetypes, tempfile, os, traceback
 from email import policy
 from email.parser import BytesParser
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate
+from email.header import decode_header, make_header, make_msgid
 import html as _html
 import re
 
 # 改行入りヘッダーを安全に正規化
+
+def _decode_rfc2047(value: str) -> str:
+    try:
+        if not value:
+            return ""
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return value
+
+
 def _clean_hdr(v: str) -> str:
     try:
         return re.sub(r'[\r\n]+', ' ', (v or '')).strip()
@@ -1736,7 +1748,7 @@ def _clean_hdr(v: str) -> str:
 def _preview_from_eml_bytes(b: bytes) -> dict:
     # 壊れたヘッダーに寛容
     msg = BytesParser(policy=policy.compat32).parsebytes(b)
-    subject = _clean_hdr(msg.get('Subject', '') or '')
+    subject = _decode_rfc2047(msg.get('Subject',''))
     from_   = _clean_hdr(msg.get('From', '') or '')
     to_     = _clean_hdr(msg.get('To', '') or '')
     cc_     = _clean_hdr(msg.get('Cc', '') or '')
@@ -1798,7 +1810,7 @@ def _preview_from_msg_bytes(b: bytes) -> dict:
         with open(p, 'wb') as f:
             f.write(b)
         m = extract_msg.Message(p)
-        subject = _clean_hdr(getattr(m, 'subject', '') or '')
+        subject = _clean_hdr(str(getattr(m, 'subject', '') or ''))
         body_text = (getattr(m, 'body', '') or '')
         body_html = (getattr(m, 'htmlBody', '') or '')
         from_ = _clean_hdr(getattr(m, 'sender', '') or '')
@@ -1847,7 +1859,7 @@ def api_mail_compose_from_ticket():
         ticket = j.get('ticket')
         if not ticket:
             return jsonify({'error': 'missing ticket'}), 400
-        subject = _clean_hdr(j.get('subject') or '')
+        subject = _clean_hdr(str(j.get('subject') or ''))
         body_html = j.get('body_html') or ''
         body_text = j.get('body_text') or ''
         keep_atts = bool(j.get('keep_attachments', True))
