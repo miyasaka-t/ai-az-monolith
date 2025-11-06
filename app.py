@@ -191,7 +191,7 @@ def _text_to_html(s: str) -> str:
 
 def build_eml_bytes(subject, from_addr, to_addrs, body_text="", body_html=None, date_str=None) -> bytes:
     msg = EmailMessage()
-    msg["Subject"] = subject or "LLM Output"
+    msg["Subject"] = _clean_hdr(subject) or "LLM Output"
     msg["From"] = from_addr or "noreply@example.com"
     msg["To"] = ", ".join(to_addrs) if isinstance(to_addrs, list) else (to_addrs or "")
     msg["Date"] = date_str or formatdate(localtime=True)
@@ -1847,7 +1847,7 @@ def api_mail_compose_from_ticket():
         ticket = j.get('ticket')
         if not ticket:
             return jsonify({'error': 'missing ticket'}), 400
-        subject = j.get('subject') or ''
+        subject = _clean_hdr(j.get('subject') or '')
         body_html = j.get('body_html') or ''
         body_text = j.get('body_text') or ''
         keep_atts = bool(j.get('keep_attachments', True))
