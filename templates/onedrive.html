@@ -1,5 +1,8 @@
 
     <script>
+    // Fixed initial folder id for both save flows
+    const FIXED_START = "01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK";
+
     // Unified resolver for initial folder id used by the picker
     function getInitFolderId() {
       try {
@@ -376,7 +379,7 @@ function openPicker(){
   $("picker").style.display="flex"; setPickedHint();
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
-  loadFolder("01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK", false, "open");
+  loadFolder(FIXED_START, false, "open");
 }
 function closePicker(){ $("picker").style.display="none"; }
 
@@ -1026,7 +1029,8 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         setStatus('編集版の保存先を選択してください...');
         // Open existing picker (same UX as the original button)
         if (typeof window.openPicker === 'function') {
-          window.openPicker();
+          window.window.INIT_FOLDER_ID = FIXED_START;
+  openPicker();
         } else {
           // Try click a visible button with the original/new label
           var btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
@@ -1158,7 +1162,8 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         } catch(_e) {}
 
         if (typeof window.openPicker === 'function') {
-          window.openPicker();
+          window.window.INIT_FOLDER_ID = FIXED_START;
+  openPicker();
         } else {
           var btns = document.querySelectorAll('button, [role="button"], .btn, .button');
           for (var i=0;i<btns.length;i++) {
