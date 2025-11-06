@@ -127,7 +127,7 @@
 
 <!-- 操作 -->
 <div class="row">
-  <button id="openPicker">📁 保存先を選ぶ</button>
+  <button id="openPicker">📁 編集せずに保存</button>
   <span id="pickedHint" class="pill"></span>
 </div>
 
@@ -501,7 +501,27 @@ async function uploadFromUrl(url, folderId, fileName){
 
 // ===== すべて保存（EML / MSG / 添付） + 条件付き GitHub保存 =====
 async function doUpload(){
-  const targetFolderId = pickedFolderId || currentId || "root";
+  
+// --- 追加: 編集版チケットがあればそれ”だけ”保存して終了 ---
+if (window.EDITED_TICKET_EML) {
+  try {
+    const emlBase = (document.getElementById('emlBase')?.value || 'Report').trim();
+    const editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
+    // Expected helper: uploadOne(endpoint, ticket, fileName) and constant: EP_UPLOAD_ORG
+    const r = await uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName);
+    if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
+    window.EDITED_TICKET_EML = null;
+    window.EDITED_FILE_NAME = null;
+    if (typeof setPickedHint === 'function') setPickedHint();
+    return; // ここで完了。他の元チケット保存ロジックは実行しない
+  } catch(e) {
+    console.error(e);
+    if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
+    // フォールバックは行わない（明示的に失敗とする）
+    throw e;
+  }
+}
+const targetFolderId = pickedFolderId || currentId || "root";
   const targetFolderName = pickedFolderName || (breadcrumb[breadcrumb.length-1] && breadcrumb[breadcrumb.length-1].name) || "/";
   setPickedHint();
 
@@ -806,7 +826,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
 })();
 </script>
 
-<!-- ✉️ メール編集（.eml） -->
+<!-- メール編集（.eml）セクション -->
 <section id="mailEditor" style="display:none;margin-top:16px;border:1px solid #ddd;padding:12px;border-radius:8px;">
   <div style="display:flex;align-items:center;gap:8px;">
     <h3 style="margin:0;">✉️ メール編集（.eml）</h3>
@@ -842,7 +862,6 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   const tabText  = document.getElementById('tabText');
   const btnSave  = document.getElementById('btnComposeSave');
 
-  function setStatus(t){ if(elStatus){ elStatus.textContent = t; } }
   function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
   function showText(){ elHtml.style.display='none';  elText.style.display='block'; }
   tabHtml?.addEventListener('click', showHTML);
@@ -852,44 +871,23 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
-      setStatus('読み込み中...');
+      elStatus.textContent = '読み込み中...';
       const r = await fetch(`/api/mail/preview-from-ticket?ticket=${encodeURIComponent(T_EML)}`);
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
       elSubj.value = j.subject || '';
       elHtml.innerHTML = (j.body_html || '').trim();
       elText.value    = (j.body_text || '').trim();
-      setStatus('プレビューOK');
+      elStatus.textContent = 'プレビューOK';
     }catch(e){
       console.error(e);
-      setStatus('読み込み失敗');
+      elStatus.textContent = '読み込み失敗';
     }
-  }
-
-  function getFolderId(REQUIRE=true){
-    const id = (window.PICKED_FOLDER_ID || '').trim();
-    if(!id && REQUIRE){ alert('保存先フォルダを選択してください。'); return null; }
-    return id || 'root';
-  }
-
-  async function uploadWithTicket(ticket, fileName){
-    const folderId = getFolderId(true);
-    if(!ticket || !folderId) return;
-    setStatus('保存中...');
-    const fd = new FormData();
-    fd.append('ticket', ticket);
-    fd.append('folderId', folderId);
-    if(fileName) fd.append('fileName', fileName);
-    const r2 = await fetch('/api/upload', { method:'POST', body: fd });
-    const j2 = await r2.json();
-    if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-    setStatus('保存完了');
-    if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
   }
 
   async function composeAndUpload(){
     try{
-      setStatus('再組み立て中...');
+      elStatus.textContent = '再組み立て中...';
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
@@ -904,142 +902,26 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       });
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'compose failed'); }
-      window.EDITED_TICKET_EML = j.ticket_eml;
-      window.EDITED_SUGGESTED_NAME = j.suggestedFileName || '';
-      setStatus('再組み立てOK → 保存中...');
-      await uploadWithTicket(window.EDITED_TICKET_EML, window.EDITED_SUGGESTED_NAME);
+      const composedTicket = j.ticket_eml;
+      elStatus.textContent = '再組み立てOK → 保存中...';
+
+      const fd = new FormData();
+      fd.append('ticket', composedTicket);
+      fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
+      if(j.suggestedFileName){ fd.append('fileName', j.suggestedFileName); }
+      const r2 = await fetch('/api/upload', { method:'POST', body: fd });
+      const j2 = await r2.json();
+      if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
+      elStatus.textContent = '保存完了';
+      if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
     }catch(e){
       console.error(e);
-      setStatus('保存失敗');
+      elStatus.textContent = '保存失敗';
       alert('保存に失敗しました: '+e.message);
     }
   }
 
-  btnSave?.addEventListener('click', composeAndUpload);
-
-  // ---- 既存の「保存先を選ぶ」ボタンを「編集せずに保存」に改名し、URLのチケットで保存 ----
-  function patchOriginalSaveButton(){
-    const all = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
-    const target = all.find(b => (b.textContent||'').trim().includes('保存先を選ぶ'));
-    if(!target) return;
-    target.textContent = '編集せずに保存';
-    const clone = target.cloneNode(true);
-    target.parentNode.replaceChild(clone, target);
-    clone.addEventListener('click', async (e)=>{
-      e.preventDefault();
-      try{
-        await uploadWithTicket(T_EML, (window.inputBaseName?.value || '').trim());
-      }catch(err){
-        console.error(err);
-        alert('保存に失敗しました: ' + err.message);
-      }
-    });
-  }
-
-  patchOriginalSaveButton();
+  document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload);
   loadPreview();
-})();
-</script>
-<!-- EML Editor Integrated UI [build-20251106-020504] -->
-<div id="eml-editor-version" style="margin-top:8px;font-size:11px;color:#666;">
-  EML Editor UI: build-20251106-020504
-</div>
-
-<script>
-(function(){
-  const VERSION = "build-20251106-020504";
-  console.log("EML editor patch version:", VERSION);
-
-  function setStatus(t){
-    const elStatus = document.getElementById('mailEditorStatus');
-    if (elStatus) elStatus.textContent = t + "  (build-20251106-020504)";
-  }
-  function findButtonsByTexts(texts){
-    const btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
-    return btns.filter(b => texts.some(tx => (b.textContent||'').trim().includes(tx)));
-  }
-  function waitForFolderIdChange(timeoutMs=20000, intervalMs=250){
-    return new Promise((resolve, reject)=>{
-      const start = Date.now();
-      const iv = setInterval(()=>{
-        const id = (window.PICKED_FOLDER_ID || '').trim();
-        if (id) { clearInterval(iv); resolve(id); }
-        else if (Date.now()-start > timeoutMs) { clearInterval(iv); reject(new Error('フォルダ選択の待機がタイムアウト')); }
-      }, intervalMs);
-    });
-  }
-  async function ensureFolderPicked() {
-    const current = (window.PICKED_FOLDER_ID || '').trim();
-    if (current) return current;
-    // Try click any candidate button that opens the picker
-    const cands = findButtonsByTexts(['保存先を選ぶ', '編集せずに保存', '保存', 'フォルダ']);
-    if (cands.length) {
-      // Click the first candidate to open dialog
-      cands[0].click();
-    }
-    // If there is a custom function, call it (user can define before patch runs)
-    if (typeof window.openFolderPicker === 'function') {
-      try { window.openFolderPicker(); } catch(_e){}
-    }
-    return await waitForFolderIdChange();
-  }
-
-  // Only rename label text if the original button exists; DO NOT replace node/handlers.
-  (function renameOriginal(){
-    const originals = findButtonsByTexts(['保存先を選ぶ']);
-    if (originals && originals[0]) {
-      originals[0].textContent = '編集せずに保存';
-    }
-  })();
-
-  // Wire "編集内容で保存" to picker → compose → upload
-  (function wireEditedSave(){
-    const qs = new URLSearchParams(location.search);
-    const urlTicket = qs.get('ticket_eml') || qs.get('ticket') || '';
-
-    const btn = document.getElementById('btnComposeSave');
-    const elSubj = document.getElementById('mailSubject');
-    const elHtml = document.getElementById('htmlPane');
-    const elText = document.getElementById('textPane');
-    if(!btn) return;
-
-    btn.addEventListener('click', async ()=>{
-      try{
-        await ensureFolderPicked();
-        setStatus('再組み立て中...');
-        const payload = {
-          ticket: urlTicket,
-          subject: (elSubj?.value || ''),
-          body_html: (elHtml?.innerHTML || ''),
-          body_text: (elText?.value || ''),
-          keep_attachments: true,
-          regenerate_date: true,
-          suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
-        };
-        const r = await fetch('/api/mail/compose-from-ticket', {
-          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-        });
-        const j = await r.json();
-        if(!j.ok) throw new Error(j.error||'compose failed');
-
-        setStatus('再組み立てOK → 保存中...');
-        const fd = new FormData();
-        fd.append('ticket', j.ticket_eml);
-        fd.append('folderId', (window.PICKED_FOLDER_ID || 'root'));
-        if(j.suggestedFileName) fd.append('fileName', j.suggestedFileName);
-        const r2 = await fetch('/api/upload', { method:'POST', body: fd });
-        const j2 = await r2.json();
-        if(!j2.ok) throw new Error(j2.error||'upload failed');
-
-        setStatus('保存完了');
-        if(window.onUploadSuccess) window.onUploadSuccess(j2);
-      }catch(e){
-        console.error(e);
-        setStatus('保存失敗');
-        alert('保存に失敗しました: ' + e.message);
-      }
-    });
-  })();
-
 })();
 </script>
