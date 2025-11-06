@@ -1724,7 +1724,8 @@ from email import policy
 from email.parser import BytesParser
 from email.message import EmailMessage
 from email.utils import formatdate
-from email.header import decode_header, make_header, make_msgid
+from email.header import decode_header, make_header
+from email.utils import make_msgid
 import html as _html
 import re
 
