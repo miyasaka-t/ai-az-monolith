@@ -1017,4 +1017,160 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     };
   })();
 })();
+</script><!-- eml-front-patch v3 1762403441 -->
+
+<script>
+(function(){
+  if (window.__EML_FRONT_PATCH_V3__) return;
+  window.__EML_FRONT_PATCH_V3__ = '1762403441';
+
+  // ---------- (1) RFC 2047 decoder + subject auto-fix ----------
+  function _decode2047(str){
+    try{ if(!str) return ""; }
+    catch(_e){ return ""; }
+    try{ str = String(str); }catch(_e){ return ""; }
+    var re = /=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/g;
+    return str.replace(re, function(_m, charset, enc, data){
+      try {
+        enc = (enc||"").toUpperCase();
+        if (enc === "B") {
+          var bin = "";
+          try { bin = atob(String(data).replace(/\s+/g,'')); } catch(_b) { return str; }
+          var bytes = new Uint8Array(bin.length);
+          for (var i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i) & 255;
+          try { return new TextDecoder(charset).decode(bytes); }
+          catch(_e1){ try { return new TextDecoder("utf-8").decode(bytes); } catch(_e2) { return str; } }
+        } else {
+          var s = String(data).replace(/_/g," ").replace(/=([0-9A-Fa-f]{2})/g, function(_,h){ return String.fromCharCode(parseInt(h,16)); });
+          var bytes2 = new Uint8Array(s.length);
+          for (var j=0;j<s.length;j++) bytes2[j] = s.charCodeAt(j) & 255;
+          try { return new TextDecoder(charset).decode(bytes2); }
+          catch(_e3) { return s; }
+        }
+      } catch(e) {
+        return str;
+      }
+    });
+  }
+  // Poll a few times after load to decode the subject if it's encoded-word
+  (function autoDecodeSubject(){
+    var tries = 0;
+    var iv = setInterval(function(){
+      tries++;
+      var el = document.getElementById('mailSubject');
+      if (el && el.value) {
+        var dec = _decode2047(el.value);
+        if (dec && dec !== el.value) el.value = dec;
+      }
+      if (tries > 40) clearInterval(iv); // ~20s at 500ms
+    }, 500);
+  })();
+
+  // ---------- (2) Picker initial folder: align "編集内容で保存" with normal flow ----------
+  // Remember last folder id when possible
+  window.DEFAULT_START_FOLDER = window.DEFAULT_START_FOLDER || null;
+
+  function _getCurrentFolderId(){
+    try {
+      if (window.PICKED_FOLDER_ID && String(window.PICKED_FOLDER_ID).trim()) return String(window.PICKED_FOLDER_ID).trim();
+      if (window.currentId && String(window.currentId).trim()) return String(window.currentId).trim();
+    } catch(_e) {}
+    return null;
+  }
+
+  (function rememberOnSave(){
+    try {
+      var btn = document.getElementById('pickerSave');
+      if (btn && !btn.__emlPatchBound) {
+        btn.__emlPatchBound = true;
+        var orig = btn.onclick;
+        btn.onclick = function(ev){
+          try {
+            var fid = _getCurrentFolderId() || 'root';
+            window.DEFAULT_START_FOLDER = fid;
+          } catch(_e) {}
+          if (typeof orig === 'function') return orig.call(this, ev);
+        };
+      }
+    } catch(_e) {}
+  })();
+
+  function _composeAndOpenPicker(){
+    try {
+      var elStatus = document.getElementById('mailEditorStatus');
+      var elSubj   = document.getElementById('mailSubject');
+      var elHtml   = document.getElementById('htmlPane');
+      var elText   = document.getElementById('textPane');
+      var qs = new URLSearchParams(location.search);
+      var T_EML = qs.get('ticket_eml') || qs.get('ticket');
+
+      if (elStatus) elStatus.textContent = '再組み立て中...';
+
+      var payload = {
+        ticket: T_EML || '',
+        subject: (elSubj && elSubj.value) ? elSubj.value : '',
+        body_html: (elHtml && elHtml.innerHTML) ? elHtml.innerHTML : '',
+        body_text: (elText && elText.value) ? elText.value : '',
+        keep_attachments: true,
+        regenerate_date: true,
+        suggestedBaseName: (window.inputBaseName && window.inputBaseName.value ? window.inputBaseName.value.replace(/^\s+|\s+$/g,'') : undefined)
+      };
+      fetch('/api/mail/compose-from-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
+        window.EDITED_TICKET_EML = j.ticket_eml;
+        window.EDITED_FILE_NAME  = j.suggestedFileName || '';
+        if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
+
+        try {
+          var last = window.DEFAULT_START_FOLDER || _getCurrentFolderId() || 'root';
+          window.INIT_FOLDER_ID = last;
+        } catch(_e) {}
+
+        if (typeof window.openPicker === 'function') {
+          window.openPicker();
+        } else {
+          var btns = document.querySelectorAll('button, [role="button"], .btn, .button');
+          for (var i=0;i<btns.length;i++) {
+            var t = (btns[i].textContent||'');
+            if (t.indexOf('編集せずに保存')>=0 || t.indexOf('保存先を選ぶ')>=0) { try{ btns[i].click(); }catch(_e){} break; }
+          }
+        }
+
+        setTimeout(function(){
+          try {
+            var target = window.DEFAULT_START_FOLDER || _getCurrentFolderId();
+            if (target && typeof window.loadFolder === 'function') {
+              window.loadFolder(target, false, 'open');
+            }
+          } catch(_e) {}
+        }, 400);
+      })
+      .catch(function(e){
+        console.error(e);
+        if (elStatus) elStatus.textContent = '保存失敗';
+        alert('保存に失敗しました: ' + e.message);
+      });
+    } catch(e){
+      console.error(e);
+      alert('保存に失敗しました: ' + e.message);
+    }
+  }
+
+  (function wireBtn(){
+    try {
+      var b = document.getElementById('btnComposeSave');
+      if (b && !b.__emlPatchBound) {
+        b.__emlPatchBound = true;
+        try { b.removeEventListener('click', _composeAndOpenPicker); }catch(_e){}
+        b.addEventListener('click', _composeAndOpenPicker);
+      }
+    } catch(e){ console.error(e); }
+  })();
+})();
 </script>
