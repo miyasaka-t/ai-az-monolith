@@ -1723,7 +1723,6 @@ from email.utils import formatdate, make_msgid
 import base64, mimetypes, tempfile, os, re, traceback
 import html as _html
 
-# ---- 共通: EML/MSG のプレビュー抽出 ----
 def _preview_from_eml_bytes(b: bytes) -> dict:
     msg = BytesParser(policy=policy.default).parsebytes(b)
     subject = msg.get('Subject', '') or ''
@@ -1737,7 +1736,6 @@ def _preview_from_eml_bytes(b: bytes) -> dict:
     body_html = ''
 
     if msg.is_multipart():
-        # まず text/plain を優先
         for part in msg.walk():
             if part.get_content_type() == 'text/plain' and part.get_content_disposition() in (None, 'inline'):
                 try:
@@ -1745,7 +1743,6 @@ def _preview_from_eml_bytes(b: bytes) -> dict:
                 except Exception:
                     body_text = (part.get_payload(decode=True) or b'').decode('utf-8', 'ignore')
                 break
-        # つぎに text/html
         for part in msg.walk():
             if part.get_content_type() == 'text/html' and part.get_content_disposition() in (None, 'inline'):
                 try:
@@ -1764,7 +1761,6 @@ def _preview_from_eml_bytes(b: bytes) -> dict:
         elif ctype == 'text/plain':
             body_text = content or ''
 
-    # 添付一覧
     atts = []
     for part in msg.walk():
         cd = part.get_content_disposition()
@@ -1784,7 +1780,6 @@ def _preview_from_eml_bytes(b: bytes) -> dict:
         'attachments': atts
     }
 
-
 def _preview_from_msg_bytes(b: bytes) -> dict:
     import extract_msg
     with tempfile.TemporaryDirectory() as td:
@@ -1793,7 +1788,6 @@ def _preview_from_msg_bytes(b: bytes) -> dict:
             f.write(b)
         m = extract_msg.Message(p)
         subject = m.subject or ''
-        # extract_msg は body（text）/ htmlBody が取れる
         body_text = (m.body or '')
         body_html = (m.htmlBody or '')
         from_ = getattr(m, 'sender', '') or ''
@@ -1816,14 +1810,8 @@ def _preview_from_msg_bytes(b: bytes) -> dict:
             'attachments': atts
         }
 
-
 @app.get('/api/mail/preview-from-ticket')
 def api_mail_preview_from_ticket():
-    """
-    Query: ticket=<id>
-    Response: { ok, subject, body_text, body_html, headers:{from,to,cc,bcc,date}, attachments:[{fileName,mime,size,disposition?}] }
-    Non-destructive peek of ticket.
-    """
     try:
         ticket = request.args.get('ticket')
         if not ticket:
@@ -1842,24 +1830,8 @@ def api_mail_preview_from_ticket():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 400
 
-
-# ---- 再組み立て（編集反映→新しい .eml のチケットを返す） ----
 @app.post('/api/mail/compose-from-ticket')
 def api_mail_compose_from_ticket():
-    """
-    Request(JSON):
-      {
-        "ticket": "...",
-        "subject": "...",
-        "body_html": "<p>..</p>",
-        "body_text": "...",
-        "keep_attachments": true,
-        "regenerate_date": true,
-        "suggestedBaseName": "..."
-      }
-    Response(JSON):
-      { ok:true, ticket_eml:"...", suggestedFileName:"...", size:<int> }
-    """
     try:
         j = request.get_json(force=True, silent=False)
         ticket = j.get('ticket')
@@ -1875,17 +1847,15 @@ def api_mail_compose_from_ticket():
         if not (body_html or body_text):
             return jsonify({'error': 'body_html or body_text is required'}), 400
 
-        # 元データ（添付引き継ぎ用）
         meta = redeem_ticket(ticket, consume=False)
         orig_name, orig_bytes, orig_mime = materialize_bytes(meta)
 
-        # 元のヘッダ候補（From/Toはそのままテンプレにしておく）
         from_addr = ''
         to_addr = ''
         cc_addr = ''
         bcc_addr = ''
         date_hdr = ''
-        orig_atts = []  # (filename, mime, bytes)
+        orig_atts = []
 
         try:
             if (orig_name or '').lower().endswith('.msg') or 'application/vnd.ms-outlook' in (orig_mime or '').lower():
@@ -1924,21 +1894,14 @@ def api_mail_compose_from_ticket():
                             mime = part.get_content_type() or 'application/octet-stream'
                             orig_atts.append((fn, mime, data))
         except Exception:
-            # 添付抽出失敗は無視（本文合成だけでも返す）
             pass
 
-        # 新しい EML を作る
         new = EmailMessage()
-        if subject:
-            new['Subject'] = subject
-        if from_addr:
-            new['From'] = from_addr
-        if to_addr:
-            new['To'] = to_addr
-        if cc_addr:
-            new['Cc'] = cc_addr
-        if bcc_addr:
-            new['Bcc'] = bcc_addr
+        if subject: new['Subject'] = subject
+        if from_addr: new['From'] = from_addr
+        if to_addr: new['To'] = to_addr
+        if cc_addr: new['Cc'] = cc_addr
+        if bcc_addr: new['Bcc'] = bcc_addr
 
         if regen or not date_hdr:
             new['Date'] = formatdate(localtime=True)
@@ -1947,25 +1910,19 @@ def api_mail_compose_from_ticket():
             new['Date'] = date_hdr
             new['Message-ID'] = make_msgid()
 
-        # multipart/alternative（text → html の順）
         if body_text:
             new.set_content(body_text)
             if body_html:
                 new.add_alternative(body_html, subtype='html')
         else:
-            # text が無ければ html 単独
             new.set_content(_html.unescape(re.sub(r'<[^>]+>', '', body_html)))
             new.add_alternative(body_html, subtype='html')
 
-        # 添付
         for fn, mime, data in orig_atts:
             maintype, subtype = (mime.split('/', 1) + ['octet-stream'])[:2]
             new.add_attachment(data, maintype=maintype, subtype=subtype, filename=fn)
 
         out_bytes = new.as_bytes()
-        size = len(out_bytes)
-
-        # チケット化（type=base64 + mime=message/rfc822）
         if not base_name:
             base, _ = os.path.splitext(orig_name or 'mail')
             base_name = f"{base}_edited"
@@ -1977,7 +1934,7 @@ def api_mail_compose_from_ticket():
             'data': base64.b64encode(out_bytes).decode('ascii')
         }
         tid2 = save_ticket(meta2, ttl=DEFAULT_TICKET_TTL)
-        return jsonify({'ok': True, 'ticket_eml': tid2, 'suggestedFileName': suggested, 'size': size})
+        return jsonify({'ok': True, 'ticket_eml': tid2, 'suggestedFileName': suggested, 'size': len(out_bytes)})
     except KeyError as e:
         return jsonify({'error': str(e)}), 404
     except Exception as e:
