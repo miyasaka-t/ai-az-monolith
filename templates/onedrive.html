@@ -940,3 +940,106 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   loadPreview();
 })();
 </script>
+<!-- EML Editor Integrated UI [build-20251106-020504] -->
+<div id="eml-editor-version" style="margin-top:8px;font-size:11px;color:#666;">
+  EML Editor UI: build-20251106-020504
+</div>
+
+<script>
+(function(){
+  const VERSION = "build-20251106-020504";
+  console.log("EML editor patch version:", VERSION);
+
+  function setStatus(t){
+    const elStatus = document.getElementById('mailEditorStatus');
+    if (elStatus) elStatus.textContent = t + "  (build-20251106-020504)";
+  }
+  function findButtonsByTexts(texts){
+    const btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
+    return btns.filter(b => texts.some(tx => (b.textContent||'').trim().includes(tx)));
+  }
+  function waitForFolderIdChange(timeoutMs=20000, intervalMs=250){
+    return new Promise((resolve, reject)=>{
+      const start = Date.now();
+      const iv = setInterval(()=>{
+        const id = (window.PICKED_FOLDER_ID || '').trim();
+        if (id) { clearInterval(iv); resolve(id); }
+        else if (Date.now()-start > timeoutMs) { clearInterval(iv); reject(new Error('フォルダ選択の待機がタイムアウト')); }
+      }, intervalMs);
+    });
+  }
+  async function ensureFolderPicked() {
+    const current = (window.PICKED_FOLDER_ID || '').trim();
+    if (current) return current;
+    // Try click any candidate button that opens the picker
+    const cands = findButtonsByTexts(['保存先を選ぶ', '編集せずに保存', '保存', 'フォルダ']);
+    if (cands.length) {
+      // Click the first candidate to open dialog
+      cands[0].click();
+    }
+    // If there is a custom function, call it (user can define before patch runs)
+    if (typeof window.openFolderPicker === 'function') {
+      try { window.openFolderPicker(); } catch(_e){}
+    }
+    return await waitForFolderIdChange();
+  }
+
+  // Only rename label text if the original button exists; DO NOT replace node/handlers.
+  (function renameOriginal(){
+    const originals = findButtonsByTexts(['保存先を選ぶ']);
+    if (originals && originals[0]) {
+      originals[0].textContent = '編集せずに保存';
+    }
+  })();
+
+  // Wire "編集内容で保存" to picker → compose → upload
+  (function wireEditedSave(){
+    const qs = new URLSearchParams(location.search);
+    const urlTicket = qs.get('ticket_eml') || qs.get('ticket') || '';
+
+    const btn = document.getElementById('btnComposeSave');
+    const elSubj = document.getElementById('mailSubject');
+    const elHtml = document.getElementById('htmlPane');
+    const elText = document.getElementById('textPane');
+    if(!btn) return;
+
+    btn.addEventListener('click', async ()=>{
+      try{
+        await ensureFolderPicked();
+        setStatus('再組み立て中...');
+        const payload = {
+          ticket: urlTicket,
+          subject: (elSubj?.value || ''),
+          body_html: (elHtml?.innerHTML || ''),
+          body_text: (elText?.value || ''),
+          keep_attachments: true,
+          regenerate_date: true,
+          suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
+        };
+        const r = await fetch('/api/mail/compose-from-ticket', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if(!j.ok) throw new Error(j.error||'compose failed');
+
+        setStatus('再組み立てOK → 保存中...');
+        const fd = new FormData();
+        fd.append('ticket', j.ticket_eml);
+        fd.append('folderId', (window.PICKED_FOLDER_ID || 'root'));
+        if(j.suggestedFileName) fd.append('fileName', j.suggestedFileName);
+        const r2 = await fetch('/api/upload', { method:'POST', body: fd });
+        const j2 = await r2.json();
+        if(!j2.ok) throw new Error(j2.error||'upload failed');
+
+        setStatus('保存完了');
+        if(window.onUploadSuccess) window.onUploadSuccess(j2);
+      }catch(e){
+        console.error(e);
+        setStatus('保存失敗');
+        alert('保存に失敗しました: ' + e.message);
+      }
+    });
+  })();
+
+})();
+</script>
