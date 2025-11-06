@@ -1,4 +1,15 @@
-<!doctype html>
+
+    <script>
+    // Unified resolver for initial folder id used by the picker
+    function getInitFolderId() {
+      try {
+        if (window.INIT_FOLDER_ID && typeof window.INIT_FOLDER_ID === 'string') return window.INIT_FOLDER_ID;
+        if (window.DEFAULT_START_FOLDER && typeof window.DEFAULT_START_FOLDER === 'string') return window.DEFAULT_START_FOLDER;
+        return 'root';
+      } catch(e) { return 'root'; }
+    }
+    </script>
+    <!doctype html>
 <meta charset="utf-8" />
 <title>OneDrive 保存（組織専用ピッカー + 新規フォルダ）</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
