@@ -1209,3 +1209,58 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   })();
 })();
 </script>
+
+  <script>
+  (function(){
+    if (window.__OPENPICKER_FORCE_PATCH__) return;
+    window.__OPENPICKER_FORCE_PATCH__ = '1';
+
+    function getInitialFolderId(){
+      try{
+        if (typeof window.INIT_FOLDER_ID === 'string' && window.INIT_FOLDER_ID.trim()) return window.INIT_FOLDER_ID.trim();
+      }catch(_e){}
+      try{
+        if (typeof window.DEFAULT_START_FOLDER === 'string' && window.DEFAULT_START_FOLDER.trim()) return window.DEFAULT_START_FOLDER.trim();
+      }catch(_e){}
+      try{
+        if (typeof window.currentId === 'string' && window.currentId.trim()) return window.currentId.trim();
+      }catch(_e){}
+      try{
+        if (typeof window.PICKED_FOLDER_ID === 'string' && window.PICKED_FOLDER_ID.trim()) return window.PICKED_FOLDER_ID.trim();
+      }catch(_e){}
+      // Fallback to your known default fixed folder id if present in page
+      try{
+        var FIXED = '01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK';
+        if (FIXED && FIXED.length > 10) return FIXED;
+      }catch(_e){}
+      return 'root';
+    }
+
+    // Capture original
+    var __orig_openPicker__ = window.openPicker;
+    if (typeof __orig_openPicker__ !== 'function') return;
+
+    window.openPicker = function(){
+      // decide initial ID *before* opening
+      var initialId = getInitialFolderId();
+      try { window.INIT_FOLDER_ID = initialId; } catch(_e){}
+
+      // open original picker
+      var ret = __orig_openPicker__.apply(this, arguments);
+
+      // after picker UI attaches, force-load target folder
+      try{
+        setTimeout(function(){
+          try {
+            if (typeof window.loadFolder === 'function'){
+              window.historyStack = []; // start clean
+              window.loadFolder(initialId, false, 'open_force');
+            }
+          }catch(_e){}
+        }, 0);
+      }catch(_e){}
+
+      return ret;
+    };
+  })();
+  </script>
