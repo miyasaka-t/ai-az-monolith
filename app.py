@@ -1821,6 +1821,7 @@ def _preview_from_msg_bytes(b: bytes) -> dict:
             'attachments': atts
         }
 
+
 @app.get('/api/mail/preview-from-ticket')
 def api_mail_preview_from_ticket():
     try:
@@ -1831,16 +1832,14 @@ def api_mail_preview_from_ticket():
         file_name, b, mime = materialize_bytes(meta)
         mime = (mime or '').lower()
         if (file_name or '').lower().endswith('.msg') or 'application/vnd.ms-outlook' in mime:
-            out = _preview_from_msg_bytes(b)
+            out = _preview_from_msg_bytes(b)  # existing .msg handler assumed present
         else:
             out = _preview_from_eml_bytes(b)
         return jsonify({'ok': True, **out, 'sourceFileName': file_name})
     except KeyError as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
     except Exception as e:
-        traceback.print_exc()
         return jsonify({'ok': False, 'error': str(e)}), 200
-
 @app.post('/api/mail/compose-from-ticket')
 def api_mail_compose_from_ticket():
     try:
@@ -1909,21 +1908,21 @@ def api_mail_compose_from_ticket():
 
         new = EmailMessage()
         if subject:
-            new['Subject'] = _clean_hdr(subject)
+            new['Subject'] = _clean_hdr(_clean_hdr(subject))
         if from_addr:
-            new['From'] = _clean_hdr(from_addr)
+            new['From'] = _clean_hdr(_clean_hdr(from_addr))
         if to_addr:
-            new['To'] = _clean_hdr(to_addr)
+            new['To'] = _clean_hdr(_clean_hdr(to_addr))
         if cc_addr:
-            new['Cc'] = _clean_hdr(cc_addr)
+            new['Cc'] = _clean_hdr(_clean_hdr(cc_addr))
         if bcc_addr:
-            new['Bcc'] = _clean_hdr(bcc_addr)
+            new['Bcc'] = _clean_hdr(_clean_hdr(bcc_addr))
 
         if regen or not date_hdr:
-            new['Date'] = formatdate(localtime=True)
+            new['Date'] = _clean_hdr(formatdate(localtime=True))
             new['Message-ID'] = make_msgid()
         else:
-            new['Date'] = _clean_hdr(date_hdr)
+            new['Date'] = _clean_hdr(_clean_hdr(date_hdr))
             new['Message-ID'] = make_msgid()
 
         if body_text:
