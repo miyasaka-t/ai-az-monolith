@@ -886,42 +886,46 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   }
 
   async function composeAndUpload(){
-    try{
-      elStatus.textContent = '再組み立て中...';
-      const payload = {
-        ticket: T_EML,
-        subject: elSubj.value || '',
-        body_html: elHtml.innerHTML || '',
-        body_text: elText.value || '',
-        keep_attachments: true,
-        regenerate_date: true,
-        suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
-      };
-      const r = await fetch('/api/mail/compose-from-ticket', {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
-      });
-      const j = await r.json();
-      if(!j.ok){ throw new Error(j.error||'compose failed'); }
-      const composedTicket = j.ticket_eml;
-      elStatus.textContent = '再組み立てOK → 保存中...';
-
-      const fd = new FormData();
-      fd.append('ticket', composedTicket);
-      fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
-      if(j.suggestedFileName){ fd.append('fileName', j.suggestedFileName); }
-      const r2 = await fetch('/api/upload', { method:'POST', body: fd });
-      const j2 = await r2.json();
-      if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-      elStatus.textContent = '保存完了';
-      if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
-    }catch(e){
+  try {
+    if (elStatus) elStatus.textContent = '再組み立て中...';
+    const payload = {
+      ticket: T_EML,
+      subject: elSubj ? (elSubj.value || '') : '',
+      body_html: elHtml ? (elHtml.innerHTML || '') : '',
+      body_text: elText ? (elText.value || '') : '',
+      keep_attachments: true,
+      regenerate_date: true,
+      suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
+    };
+    fetch('/api/mail/compose-from-ticket', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(j => {
+      if (!j.ok) throw new Error(j.error || 'compose failed');
+      window.EDITED_TICKET_EML = j.ticket_eml;
+      window.EDITED_FILE_NAME  = j.suggestedFileName || '';
+      if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
+      if (typeof openPicker === 'function') {
+        openPicker();
+      } else {
+        const btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
+        const cand = btns.find(b => (b.textContent||'').includes('編集せずに保存') || (b.textContent||'').includes('保存先を選ぶ'));
+        cand?.click();
+      }
+    })
+    .catch(e => {
       console.error(e);
-      elStatus.textContent = '保存失敗';
-      alert('保存に失敗しました: '+e.message);
-    }
+      if (elStatus) elStatus.textContent = '保存失敗';
+      alert('保存に失敗しました: ' + e.message);
+    });
+  } catch(e) {
+    console.error(e);
+    if (elStatus) elStatus.textContent = '保存失敗';
+    alert('保存に失敗しました: ' + e.message);
   }
-
-  document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload);
-  loadPreview();
+}
 })();
 </script>
