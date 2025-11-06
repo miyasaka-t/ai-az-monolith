@@ -1712,3 +1712,274 @@ def extract_pdf_tables():
     except Exception as e:
         payload = {"ok": False, "error": f"extract_failed: {e}", "filename": fname}
         return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json; charset=utf-8", status=400)
+
+# ===============================
+# ========== EML 編集API =========
+# ===============================
+from email import policy
+from email.parser import BytesParser
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+import base64, mimetypes, tempfile, os, re, traceback
+import html as _html
+
+# ---- 共通: EML/MSG のプレビュー抽出 ----
+def _preview_from_eml_bytes(b: bytes) -> dict:
+    msg = BytesParser(policy=policy.default).parsebytes(b)
+    subject = msg.get('Subject', '') or ''
+    from_ = msg.get('From', '') or ''
+    to_   = msg.get('To', '') or ''
+    cc_   = msg.get('Cc', '') or ''
+    bcc_  = msg.get('Bcc', '') or ''
+    date_ = msg.get('Date', '') or ''
+
+    body_text = ''
+    body_html = ''
+
+    if msg.is_multipart():
+        # まず text/plain を優先
+        for part in msg.walk():
+            if part.get_content_type() == 'text/plain' and part.get_content_disposition() in (None, 'inline'):
+                try:
+                    body_text = part.get_content()
+                except Exception:
+                    body_text = (part.get_payload(decode=True) or b'').decode('utf-8', 'ignore')
+                break
+        # つぎに text/html
+        for part in msg.walk():
+            if part.get_content_type() == 'text/html' and part.get_content_disposition() in (None, 'inline'):
+                try:
+                    body_html = part.get_content()
+                except Exception:
+                    body_html = (part.get_payload(decode=True) or b'').decode('utf-8', 'ignore')
+                break
+    else:
+        ctype = msg.get_content_type()
+        try:
+            content = msg.get_content()
+        except Exception:
+            content = (msg.get_payload(decode=True) or b'').decode('utf-8', 'ignore')
+        if ctype == 'text/html':
+            body_html = content or ''
+        elif ctype == 'text/plain':
+            body_text = content or ''
+
+    # 添付一覧
+    atts = []
+    for part in msg.walk():
+        cd = part.get_content_disposition()
+        if cd in ('attachment', 'inline') and part.get_filename():
+            atts.append({
+                'fileName': part.get_filename(),
+                'mime': part.get_content_type(),
+                'disposition': cd,
+                'size': len(part.get_payload(decode=True) or b'')
+            })
+
+    return {
+        'subject': subject,
+        'body_text': body_text,
+        'body_html': body_html,
+        'headers': {'from': from_, 'to': to_, 'cc': cc_, 'bcc': bcc_, 'date': date_},
+        'attachments': atts
+    }
+
+
+def _preview_from_msg_bytes(b: bytes) -> dict:
+    import extract_msg
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 'mail.msg')
+        with open(p, 'wb') as f:
+            f.write(b)
+        m = extract_msg.Message(p)
+        subject = m.subject or ''
+        # extract_msg は body（text）/ htmlBody が取れる
+        body_text = (m.body or '')
+        body_html = (m.htmlBody or '')
+        from_ = getattr(m, 'sender', '') or ''
+        to_   = getattr(m, 'to', '') or ''
+        cc_   = getattr(m, 'cc', '') or ''
+        bcc_  = getattr(m, 'bcc', '') or ''
+        date_ = getattr(m, 'date', '') or ''
+        atts = []
+        for a in m.attachments or []:
+            name = getattr(a, 'longFilename', '') or getattr(a, 'shortFilename', '') or 'attachment'
+            data = getattr(a, 'data', None)
+            if not data:
+                continue
+            atts.append({'fileName': name, 'mime': mimetypes.guess_type(name)[0] or 'application/octet-stream', 'size': len(data)})
+        return {
+            'subject': subject,
+            'body_text': body_text,
+            'body_html': body_html,
+            'headers': {'from': from_, 'to': to_, 'cc': cc_, 'bcc': bcc_, 'date': date_},
+            'attachments': atts
+        }
+
+
+@app.get('/api/mail/preview-from-ticket')
+def api_mail_preview_from_ticket():
+    """
+    Query: ticket=<id>
+    Response: { ok, subject, body_text, body_html, headers:{from,to,cc,bcc,date}, attachments:[{fileName,mime,size,disposition?}] }
+    Non-destructive peek of ticket.
+    """
+    try:
+        ticket = request.args.get('ticket')
+        if not ticket:
+            return jsonify({'error': 'missing ticket'}), 400
+        meta = redeem_ticket(ticket, consume=False)
+        file_name, b, mime = materialize_bytes(meta)
+        mime = (mime or '').lower()
+        if (file_name or '').lower().endswith('.msg') or 'application/vnd.ms-outlook' in mime:
+            out = _preview_from_msg_bytes(b)
+        else:
+            out = _preview_from_eml_bytes(b)
+        return jsonify({'ok': True, **out, 'sourceFileName': file_name})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 400
+
+
+# ---- 再組み立て（編集反映→新しい .eml のチケットを返す） ----
+@app.post('/api/mail/compose-from-ticket')
+def api_mail_compose_from_ticket():
+    """
+    Request(JSON):
+      {
+        "ticket": "...",
+        "subject": "...",
+        "body_html": "<p>..</p>",
+        "body_text": "...",
+        "keep_attachments": true,
+        "regenerate_date": true,
+        "suggestedBaseName": "..."
+      }
+    Response(JSON):
+      { ok:true, ticket_eml:"...", suggestedFileName:"...", size:<int> }
+    """
+    try:
+        j = request.get_json(force=True, silent=False)
+        ticket = j.get('ticket')
+        if not ticket:
+            return jsonify({'error': 'missing ticket'}), 400
+        subject = j.get('subject') or ''
+        body_html = j.get('body_html') or ''
+        body_text = j.get('body_text') or ''
+        keep_atts = bool(j.get('keep_attachments', True))
+        regen     = bool(j.get('regenerate_date', True))
+        base_name = (j.get('suggestedBaseName') or '').strip()
+
+        if not (body_html or body_text):
+            return jsonify({'error': 'body_html or body_text is required'}), 400
+
+        # 元データ（添付引き継ぎ用）
+        meta = redeem_ticket(ticket, consume=False)
+        orig_name, orig_bytes, orig_mime = materialize_bytes(meta)
+
+        # 元のヘッダ候補（From/Toはそのままテンプレにしておく）
+        from_addr = ''
+        to_addr = ''
+        cc_addr = ''
+        bcc_addr = ''
+        date_hdr = ''
+        orig_atts = []  # (filename, mime, bytes)
+
+        try:
+            if (orig_name or '').lower().endswith('.msg') or 'application/vnd.ms-outlook' in (orig_mime or '').lower():
+                import extract_msg
+                with tempfile.TemporaryDirectory() as td:
+                    p = os.path.join(td, 'mail.msg')
+                    with open(p, 'wb') as f:
+                        f.write(orig_bytes)
+                    m = extract_msg.Message(p)
+                    from_addr = getattr(m, 'sender', '') or ''
+                    to_addr   = getattr(m, 'to', '') or ''
+                    cc_addr   = getattr(m, 'cc', '') or ''
+                    bcc_addr  = getattr(m, 'bcc', '') or ''
+                    date_hdr  = getattr(m, 'date', '') or ''
+                    if keep_atts:
+                        for a in m.attachments or []:
+                            name = getattr(a, 'longFilename', '') or getattr(a, 'shortFilename', '') or 'attachment'
+                            data = getattr(a, 'data', None)
+                            if not data:
+                                continue
+                            mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+                            orig_atts.append((name, mime, data))
+            else:
+                em = BytesParser(policy=policy.default).parsebytes(orig_bytes)
+                from_addr = em.get('From', '') or ''
+                to_addr   = em.get('To', '') or ''
+                cc_addr   = em.get('Cc', '') or ''
+                bcc_addr  = em.get('Bcc', '') or ''
+                date_hdr  = em.get('Date', '') or ''
+                if keep_atts:
+                    for part in em.walk():
+                        cd = part.get_content_disposition()
+                        fn = part.get_filename()
+                        if cd in ('attachment', 'inline') and fn:
+                            data = part.get_payload(decode=True) or b''
+                            mime = part.get_content_type() or 'application/octet-stream'
+                            orig_atts.append((fn, mime, data))
+        except Exception:
+            # 添付抽出失敗は無視（本文合成だけでも返す）
+            pass
+
+        # 新しい EML を作る
+        new = EmailMessage()
+        if subject:
+            new['Subject'] = subject
+        if from_addr:
+            new['From'] = from_addr
+        if to_addr:
+            new['To'] = to_addr
+        if cc_addr:
+            new['Cc'] = cc_addr
+        if bcc_addr:
+            new['Bcc'] = bcc_addr
+
+        if regen or not date_hdr:
+            new['Date'] = formatdate(localtime=True)
+            new['Message-ID'] = make_msgid()
+        else:
+            new['Date'] = date_hdr
+            new['Message-ID'] = make_msgid()
+
+        # multipart/alternative（text → html の順）
+        if body_text:
+            new.set_content(body_text)
+            if body_html:
+                new.add_alternative(body_html, subtype='html')
+        else:
+            # text が無ければ html 単独
+            new.set_content(_html.unescape(re.sub(r'<[^>]+>', '', body_html)))
+            new.add_alternative(body_html, subtype='html')
+
+        # 添付
+        for fn, mime, data in orig_atts:
+            maintype, subtype = (mime.split('/', 1) + ['octet-stream'])[:2]
+            new.add_attachment(data, maintype=maintype, subtype=subtype, filename=fn)
+
+        out_bytes = new.as_bytes()
+        size = len(out_bytes)
+
+        # チケット化（type=base64 + mime=message/rfc822）
+        if not base_name:
+            base, _ = os.path.splitext(orig_name or 'mail')
+            base_name = f"{base}_edited"
+        suggested = base_name + '.eml'
+        meta2 = {
+            'type': 'base64',
+            'fileName': suggested,
+            'mime': 'message/rfc822',
+            'data': base64.b64encode(out_bytes).decode('ascii')
+        }
+        tid2 = save_ticket(meta2, ttl=DEFAULT_TICKET_TTL)
+        return jsonify({'ok': True, 'ticket_eml': tid2, 'suggestedFileName': suggested, 'size': size})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 400
