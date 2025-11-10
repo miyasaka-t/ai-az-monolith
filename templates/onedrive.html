@@ -911,7 +911,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
 })();
 </script>
 
-<!-- メール編集（.eml）セクション -->
+<!-- メール編集（.eml）セクション（A案：テキスト1本→HTML自動生成） -->
 <section id="mailEditor" style="display:none;margin-top:16px;border:1px solid #ddd;padding:12px;border-radius:8px;">
   <div style="display:flex;align-items:center;gap:8px;">
     <h3 style="margin:0;">✉️ メール編集（.eml）</h3>
@@ -922,12 +922,12 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     <input id="mailSubject" type="text" style="width:100%;padding:6px;" placeholder="件名" />
   </div>
   <div style="margin-top:8px;">
-    <div style="display:flex;gap:8px;margin-bottom:6px;">
-      <button type="button" id="tabHtml">HTML</button>
-      <button type="button" id="tabText">テキスト</button>
-    </div>
-    <div id="htmlPane" contenteditable="true" style="border:1px solid #ccc;min-height:160px;padding:8px;overflow:auto;"></div>
-    <textarea id="textPane" style="display:none;width:100%;min-height:160px;padding:8px;"></textarea>
+    <label>本文（テキストのみ・改行対応）</label>
+    <textarea id="textPane" style="width:100%;min-height:220px;padding:8px;"></textarea>
+    <details id="htmlPreviewWrap" style="margin-top:8px;">
+      <summary style="cursor:pointer;">HTMLプレビュー（自動生成・読み取り専用）</summary>
+      <div id="htmlPreview" style="border:1px solid #ccc;min-height:120px;padding:8px;overflow:auto;"></div>
+    </details>
   </div>
   <div style="margin-top:10px;display:flex;gap:8px;">
     <button type="button" id="btnComposeSave">編集内容で保存</button>
@@ -941,16 +941,23 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   const elEditor = document.getElementById('mailEditor');
   const elStatus = document.getElementById('mailEditorStatus');
   const elSubj   = document.getElementById('mailSubject');
-  const elHtml   = document.getElementById('htmlPane');
   const elText   = document.getElementById('textPane');
-  const tabHtml  = document.getElementById('tabHtml');
-  const tabText  = document.getElementById('tabText');
-  const btnSave  = document.getElementById('btnComposeSave');
+  const elPrev   = document.getElementById('htmlPreview');
 
-  function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
-  function showText(){ elHtml.style.display='none';  elText.style.display='block'; }
-  tabHtml?.addEventListener('click', showHTML);
-  tabText?.addEventListener('click', showText);
+  function escHtml(s){
+    return (s||'').replace(/[&<>"']/g, function(m){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
+    });
+  }
+  function textToHtml(s){
+    // escape + convert newlines to <br>
+    const esc = escHtml(s||'');
+    return esc.replace(/\r?\n/g, '<br>');
+  }
+  function renderPreview(){
+    try{ elPrev.innerHTML = textToHtml(elText.value || ''); }catch(e){}
+  }
+  elText.addEventListener('input', renderPreview);
 
   async function loadPreview(){
     if(!T_EML) return;
@@ -961,8 +968,21 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
       elSubj.value = j.subject || '';
-      elHtml.innerHTML = (j.body_html || '').trim();
-      elText.value    = (j.body_text || '').trim();
+      // Prefer text if provided; else derive from HTML preview
+      const txt = (j.body_text || '').trim();
+      if (txt) {
+        elText.value = txt;
+      } else {
+        // HTML -> text fallback: keep line breaks for <br> and <p>, strip tags/scripts/styles
+        const h = (j.body_html || '')
+          .replace(/<\s*br\s*\/??\s*>/gi, '\n')
+          .replace(/<\/?p\s*>/gi, '\n')
+          .replace(/<script[\s\S]*?<\/script>/gi,'')
+          .replace(/<style[\s\S]*?<\/style>/gi,'')
+          .replace(/<[^>]+>/g, '');
+        elText.value = h.trim();
+      }
+      renderPreview();
       elStatus.textContent = 'プレビューOK';
     }catch(e){
       console.error(e);
@@ -976,8 +996,9 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
-        body_html: elHtml.innerHTML || '',
         body_text: elText.value || '',
+        // auto-generate HTML from text
+        body_html: textToHtml(elText.value || ''),
         keep_attachments: true,
         regenerate_date: true,
         suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
@@ -1011,223 +1032,46 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
 })();
 </script>
 
-<!-- eml-final-patch version 1762397407 -->
+<!-- eml-final-patch version textonly-3 -->
 <script>
 (function(){
   if (window.__emlFinalPatch__) return;
-  window.__emlFinalPatch__ = "1762397407";
-
-  // Visible version mark
-  var qs = new URLSearchParams(location.search);
-  var T_EML = qs.get('ticket_eml') || qs.get('ticket') || '';
+  window.__emlFinalPatch__ = "textonly-3";
 
   var elStatus = document.getElementById('mailEditorStatus');
-  var elSubj   = document.getElementById('mailSubject');
-  var elHtml   = document.getElementById('htmlPane');
-  var elText   = document.getElementById('textPane');
-  var btnSave  = document.getElementById('btnComposeSave');
-
   function setStatus(t){ if (elStatus) elStatus.textContent = t; }
 
-  // Define composeAndUpload in a safe, non-async way
-  window.composeAndUpload = function(){
-    try {
-      setStatus('再組み立て中...');
-      var payload = {
-        ticket: T_EML,
-        subject: elSubj ? (elSubj.value || '') : '',
-        body_html: elHtml ? (elHtml.innerHTML || '') : '',
-        body_text: elText ? (elText.value || '') : '',
-        keep_attachments: true,
-        regenerate_date: true,
-        suggestedBaseName: (window.inputBaseName && window.inputBaseName.value ? window.inputBaseName.value.trim() : undefined)
-      };
-      fetch('/api/mail/compose-from-ticket', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
-        // Stash edited ticket for later upload
-        window.EDITED_TICKET_EML = j.ticket_eml;
-        window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-        setStatus('編集版の保存先を選択してください...');
-        // Open existing picker (same UX as the original button)
-        if (typeof window.openPicker === 'function') {
-          window.window.INIT_FOLDER_ID = FIXED_START;
-  openPicker();
-        } else {
-          // Try click a visible button with the original/new label
-          var btns = Array.from(document.querySelectorAll('button, [role="button"], .btn, .button'));
-          var cand = btns.find(function(b){ var t=(b.textContent||''); return t.indexOf('編集せずに保存')>=0 || t.indexOf('保存先を選ぶ')>=0; });
-          if (cand) try { cand.click(); } catch(_e){}
-        }
-      })
-      .catch(function(e){
-        console.error(e);
-        setStatus('保存失敗');
-        alert('保存に失敗しました: ' + e.message);
-      });
-    } catch(e) {
-      console.error(e);
-      setStatus('保存失敗');
-      alert('保存に失敗しました: ' + e.message);
-    }
-  };
-
-  // Hook button if present
-  if (btnSave) {
-    try { btnSave.removeEventListener('click', window.composeAndUpload); } catch(_e){}
-    btnSave.addEventListener('click', window.composeAndUpload);
+  // Ensure compose button works if earlier script didn't bind
+  var btn = document.getElementById('btnComposeSave');
+  if (btn && typeof window.composeAndUpload === 'function') {
+    try { btn.removeEventListener('click', window.composeAndUpload); } catch(_e){}
+    btn.addEventListener('click', window.composeAndUpload);
   }
 
-  // Wrap doUpload so that if an edited ticket exists, we upload it and return early.
+  // Wrap doUpload so edited EML (if any) goes first
   (function wrapDoUpload(){
-    if (window.__orig_doUpload__) return; // already wrapped
+    if (window.__orig_doUpload__) return;
     if (typeof window.doUpload !== 'function') return;
     window.__orig_doUpload__ = window.doUpload;
     window.doUpload = function(){
-      // If we have an edited EML, upload it first, then continue with the normal pipeline
       if (window.EDITED_TICKET_EML) {
         var emlBaseEl = document.getElementById('emlBase');
         var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
-        var editedName = (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml')); // Pattern B: force UI base name
+        var editedName = (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
         return Promise.resolve()
-          .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
+          .then(function(){ return uploadOne((window.EP_UPLOAD_ORG||'/api/upload'), window.EDITED_TICKET_EML, editedName); })
           .then(function(r){
             if (typeof log === 'function') log(r.ok ? "✅ 編集後本文保存成功" : ("❌ 編集後 eml " + JSON.stringify(r.body)));
-            // Set a guard so original doUpload won't save EML again
             window.EML_ALREADY_UPLOADED = true;
-            // Clear edited variables to avoid reuse
             window.EDITED_TICKET_EML = null;
             window.EDITED_FILE_NAME = null;
           })
-          .then(()=>{
-            try{ if (typeof setPickedHint === 'function') setPickedHint(); }catch(_e){}
-            // Continue with the original pipeline (msg, attachments, VBS, etc.)
-            return window.__orig_doUpload__.apply(this, arguments);
-          })
-          .finally(function(){
-            // Remove guard after run
-            try{ window.EML_ALREADY_UPLOADED = false; }catch(_e){}
-          })
-          .catch(function(e){
-            console.error(e);
-            if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message));
-            throw e;
-          });
+          .then(function(){ return window.__orig_doUpload__.apply(this, arguments); })
+          .finally(function(){ try{ window.EML_ALREADY_UPLOADED = false; }catch(_e){} })
+          .catch(function(e){ if (typeof log === 'function') log("❌ 編集後 eml 保存エラー: " + (e && e.message)); throw e; });
       }
-      // No edited ticket: normal behavior
       return window.__orig_doUpload__.apply(this, arguments);
     };
-  })();  // ---------- (2) Picker initial folder: align "編集内容で保存" with normal flow ----------
-  // Remember last folder id when possible
-  window.DEFAULT_START_FOLDER = window.DEFAULT_START_FOLDER || null;
-
-  function _getCurrentFolderId(){
-    try {
-      if (window.PICKED_FOLDER_ID && String(window.PICKED_FOLDER_ID).trim()) return String(window.PICKED_FOLDER_ID).trim();
-      if (window.currentId && String(window.currentId).trim()) return String(window.currentId).trim();
-    } catch(_e) {}
-    return null;
-  }
-
-  (function rememberOnSave(){
-    try {
-      var btn = document.getElementById('pickerSave');
-      if (btn && !btn.__emlPatchBound) {
-        btn.__emlPatchBound = true;
-        var orig = btn.onclick;
-        btn.onclick = function(ev){
-          try {
-            var fid = _getCurrentFolderId() || 'root';
-            window.DEFAULT_START_FOLDER = fid;
-          } catch(_e) {}
-          if (typeof orig === 'function') return orig.call(this, ev);
-        };
-      }
-    } catch(_e) {}
-  })();
-
-  function _composeAndOpenPicker(){
-    try {
-      var elStatus = document.getElementById('mailEditorStatus');
-      var elSubj   = document.getElementById('mailSubject');
-      var elHtml   = document.getElementById('htmlPane');
-      var elText   = document.getElementById('textPane');
-      var qs = new URLSearchParams(location.search);
-      var T_EML = qs.get('ticket_eml') || qs.get('ticket');
-
-      if (elStatus) elStatus.textContent = '再組み立て中...';
-
-      var payload = {
-        ticket: T_EML || '',
-        subject: (elSubj && elSubj.value) ? elSubj.value : '',
-        body_html: (elHtml && elHtml.innerHTML) ? elHtml.innerHTML : '',
-        body_text: (elText && elText.value) ? elText.value : '',
-        keep_attachments: true,
-        regenerate_date: true,
-        suggestedBaseName: (window.inputBaseName && window.inputBaseName.value ? window.inputBaseName.value.replace(/^\s+|\s+$/g,'') : undefined)
-      };
-      fetch('/api/mail/compose-from-ticket', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
-        window.EDITED_TICKET_EML = j.ticket_eml;
-        window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-        if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
-
-        try {
-          var last = window.DEFAULT_START_FOLDER || _getCurrentFolderId() || 'root';
-          window.INIT_FOLDER_ID = last;
-        } catch(_e) {}
-
-        if (typeof window.openPicker === 'function') {
-          window.window.INIT_FOLDER_ID = FIXED_START;
-  openPicker();
-        } else {
-          var btns = document.querySelectorAll('button, [role="button"], .btn, .button');
-          for (var i=0;i<btns.length;i++) {
-            var t = (btns[i].textContent||'');
-            if (t.indexOf('編集せずに保存')>=0 || t.indexOf('保存先を選ぶ')>=0) { try{ btns[i].click(); }catch(_e){} break; }
-          }
-        }
-
-        setTimeout(function(){
-          try {
-            var target = window.DEFAULT_START_FOLDER || _getCurrentFolderId();
-            if (target && typeof window.loadFolder === 'function') {
-              window.loadFolder(target, false, 'open');
-            }
-          } catch(_e) {}
-        }, 400);
-      })
-      .catch(function(e){
-        console.error(e);
-        if (elStatus) elStatus.textContent = '保存失敗';
-        alert('保存に失敗しました: ' + e.message);
-      });
-    } catch(e){
-      console.error(e);
-      alert('保存に失敗しました: ' + e.message);
-    }
-  }
-
-  (function wireBtn(){
-    try {
-      var b = document.getElementById('btnComposeSave');
-      if (b && !b.__emlPatchBound) {
-        b.__emlPatchBound = true;
-        try { b.removeEventListener('click', _composeAndOpenPicker); }catch(_e){}
-        b.addEventListener('click', _composeAndOpenPicker);
-      }
-    } catch(e){ console.error(e); }
   })();
 })();
 </script>
