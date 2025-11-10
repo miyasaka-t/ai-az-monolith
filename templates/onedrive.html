@@ -962,7 +962,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
-      elStatus.textContent = '読み込み中...';
+      setStatus('読み込み中...');
       const r = await fetch(`/api/mail/preview-from-ticket?ticket=${encodeURIComponent(T_EML)}`);
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
@@ -982,16 +982,16 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         elText.value = h.trim();
       }
       renderPreview();
-      elStatus.textContent = 'プレビューOK';
+      setStatus('プレビューOK');
     }catch(e){
       console.error(e);
-      elStatus.textContent = '読み込み失敗';
+      setStatus('読み込み失敗');
     }
   }
 
   async function composeAndUpload(){
     try{
-      elStatus.textContent = '再組み立て中...';
+      setStatus('再組み立て中...');
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
@@ -1012,14 +1012,14 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       if (typeof window.openPicker === 'function') {
         window.EDITED_TICKET_EML = j.ticket_eml;
         window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-        elStatus.textContent = '保存先を選択してください...';
+        setStatus('保存先を選択してください...');
         openPicker();
         return;
       }
 
       // fallback: direct upload (旧仕様)
       const composedTicket = j.ticket_eml;
-      elStatus.textContent = '再組み立てOK → 保存中...';
+      setStatus('再組み立てOK → 保存中...');
       const fd = new FormData();
       fd.append('ticket', composedTicket);
       fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
@@ -1027,11 +1027,11 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       const j2 = await r2.json();
       if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-      elStatus.textContent = '保存完了';
+      setStatus('保存完了');
       if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
     }catch(e){
       console.error(e);
-      elStatus.textContent = '保存失敗';
+      setStatus('保存失敗');
       alert('保存に失敗しました: '+e.message);
     }
   }
@@ -1049,7 +1049,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   window.__emlFinalPatch__ = "textonly-3";
 
   var elStatus = document.getElementById('mailEditorStatus');
-  function setStatus(t){ if (elStatus) elStatus.textContent = t; }
+  function setStatus(t){ if(!elStatus) return; if(/^読み込み中/.test(t) || /^読み込み失敗/.test(t)){ elStatus.textContent = t; } else { elStatus.textContent = ''; } }
 
   // Ensure compose button works if earlier script didn't bind
   var btn = document.getElementById('btnComposeSave');
