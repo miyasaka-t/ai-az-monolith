@@ -14,7 +14,7 @@
     </script>
     <!doctype html>
 <meta charset="utf-8" />
-<title>OneDrive 保存（組織専用ピッカー + 新規フォルダ）</title>
+<title>OneDrive 保存</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:,">
 <style>
@@ -162,12 +162,12 @@ body.with-log-sidebar{padding-right: 380px;}
 <!-- ベース名入力 -->
 <div class="row vertical">
   <div class="col">
-    <label class="small">AI作成本文（.eml）のベース名</label>
+    <label class="small">AIエージェン作成メールの保存ファイル名</label>
     <input id="emlBase" type="text" placeholder="Report">
     <div class="muted" id="nm_eml_hint"></div>
   </div>
   <div class="col">
-    <label class="small">添付ファイルのベース名（拡張子は添付のオリジナルを強制付与／複数時はそのまま）</label>
+    <label class="small">スキルシートの保存ファイル名</label>
     <input id="xlsxBase" type="text" placeholder="Attachment">
     <div class="muted" id="nm_xlsx_hint"></div>
   </div>
@@ -919,7 +919,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
 <!-- メール編集（.eml）セクション（A案：テキスト1本→HTML自動生成） -->
 <section id="mailEditor" style="display:none;margin-top:16px;border:1px solid #ddd;padding:12px;border-radius:8px;">
   <div style="display:flex;align-items:center;gap:8px;">
-    <h3 style="margin:0;">✉️ メール編集（.eml）</h3>
+    <h3 style="margin:0;">✉️ メール編集（必要に応じて手動で編集してください）</h3>
     <span id="mailEditorStatus" style="font-size:12px;color:#666"></span>
   </div>
   <div style="margin-top:8px;">
