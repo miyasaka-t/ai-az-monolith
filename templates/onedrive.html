@@ -1,27 +1,4 @@
 
-<style>
-/* === PATCH: status + sticky log (safe) === */
-#mailEditorStatus{ display:none !important; }
-#mailEditorStatus[data-status="読み込み中"]{ display:inline !important; }
-/* sticky bottom log without altering original structure too much */
-#log{
-  position: sticky;
-  bottom: 0;
-  max-height: 28vh;
-  overflow: auto;
-  background: #111;
-  color: #eee;
-  border-top: 1px solid #444;
-  padding: 8px 10px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-body { scroll-padding-bottom: 30vh; }
-</style>
-
-
     <script>
     // Fixed initial folder id for both save flows
     const FIXED_START = "01URYU5JOWFGM7H5QYZNBIIMMFCSQLV6BK";
@@ -151,7 +128,7 @@ body { scroll-padding-bottom: 30vh; }
 <!-- ベース名入力 -->
 <div class="row vertical">
   <div class="col">
-    <label class="small">ベース名（AI作成/編集共通）</label>
+    <label class="small">AI作成本文（.eml）のベース名</label>
     <input id="emlBase" type="text" placeholder="Report">
     <div class="muted" id="nm_eml_hint"></div>
   </div>
@@ -936,7 +913,18 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   const tabText  = document.getElementById('tabText');
   const btnSave  = document.getElementById('btnComposeSave');
 
-  function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
+  
+  // Map legacy inputBaseName -> #emlBase for unified base naming
+  window.inputBaseName = document.getElementById('emlBase');
+  function setStatusOnlyLoading(t){
+    const show = (typeof t === 'string') && t.indexOf('読み込み中') >= 0;
+    if (show) {
+      if (elStatus) setStatusOnlyLoading('読み込み中.');
+    } else {
+      if (elStatus) setStatusOnlyLoading('');
+    }
+  }
+function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
   function showText(){ elHtml.style.display='none';  elText.style.display='block'; }
   tabHtml?.addEventListener('click', showHTML);
   tabText?.addEventListener('click', showText);
@@ -945,23 +933,23 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
-      elStatus.textContent = '読み込み中...';
+      setStatusOnlyLoading('読み込み中...');
       const r = await fetch(`/api/mail/preview-from-ticket?ticket=${encodeURIComponent(T_EML)}`);
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
       elSubj.value = j.subject || '';
       elHtml.innerHTML = (j.body_html || '').trim();
       elText.value    = (j.body_text || '').trim();
-      elStatus.textContent = 'プレビューOK';
+      setStatusOnlyLoading('プレビューOK');
     }catch(e){
       console.error(e);
-      elStatus.textContent = '読み込み失敗';
+      setStatusOnlyLoading('読み込み失敗');
     }
   }
 
   async function composeAndUpload(){
     try{
-      elStatus.textContent = '再組み立て中...';
+      setStatusOnlyLoading('再組み立て中...');
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
@@ -969,7 +957,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         body_text: elText.value || '',
         keep_attachments: true,
         regenerate_date: true,
-        suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
+        suggestedBaseName: (document.getElementById('emlBase')?.value || '').trim() || undefined
       };
       const r = await fetch('/api/mail/compose-from-ticket', {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -977,20 +965,23 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'compose failed'); }
       const composedTicket = j.ticket_eml;
-      elStatus.textContent = '再組み立てOK → 保存中...';
+      setStatusOnlyLoading('再組み立てOK → 保存中...');
 
       const fd = new FormData();
       fd.append('ticket', composedTicket);
       fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
-      if(j.suggestedFileName){ fd.append('fileName', j.suggestedFileName); }
-      const r2 = await fetch('/api/upload', { method:'POST', body: fd });
+        // Force edited EML name from #emlBase (shared with AI-created)
+  const __emlBase = (document.getElementById('emlBase')?.value || 'Report').trim();
+  const __emlName = /\.eml$/i.test(__emlBase) ? __emlBase : (__emlBase + '.eml');
+  fd.append('fileName', __emlName);
+const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       const j2 = await r2.json();
       if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-      elStatus.textContent = '保存完了';
+      setStatusOnlyLoading('保存完了');
       if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
     }catch(e){
       console.error(e);
-      elStatus.textContent = '保存失敗';
+      setStatusOnlyLoading('保存失敗');
       alert('保存に失敗しました: '+e.message);
     }
   }
@@ -1023,7 +1014,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   var elText   = document.getElementById('textPane');
   var btnSave  = document.getElementById('btnComposeSave');
 
-  function setStatus(t){ if (elStatus) elStatus.textContent = t; }
+  function setStatus(t){ if (elStatus) { elStatus.textContent = (typeof t==='string' && t.indexOf('読み込み中')>=0) ? '読み込み中.' : ''; } }
 
   // Define composeAndUpload in a safe, non-async way
   window.composeAndUpload = function(){
@@ -1156,7 +1147,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       var qs = new URLSearchParams(location.search);
       var T_EML = qs.get('ticket_eml') || qs.get('ticket');
 
-      if (elStatus) elStatus.textContent = '再組み立て中...';
+      if (elStatus) setStatusOnlyLoading('再組み立て中...');
 
       var payload = {
         ticket: T_EML || '',
@@ -1177,7 +1168,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         if (!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
         window.EDITED_TICKET_EML = j.ticket_eml;
         window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-        if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
+        if (elStatus) setStatusOnlyLoading('編集版の保存先を選択してください...');
 
         try {
           var last = window.DEFAULT_START_FOLDER || _getCurrentFolderId() || 'root';
@@ -1206,7 +1197,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       })
       .catch(function(e){
         console.error(e);
-        if (elStatus) elStatus.textContent = '保存失敗';
+        if (elStatus) setStatusOnlyLoading('保存失敗');
         alert('保存に失敗しました: ' + e.message);
       });
     } catch(e){
@@ -1225,107 +1216,5 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       }
     } catch(e){ console.error(e); }
   })();
-})();
-</script>
-
-
-<script id="patch-frontend-overrides-clean">
-(function(){
-  'use strict';
-
-  function markStatus(el, text){
-    try{
-      if(!el) return;
-      var t = (typeof text === "string") ? text : ((el.textContent||"").trim());
-      if (t === "読み込み中") {
-        el.setAttribute('data-status','読み込み中');
-      } else {
-        el.removeAttribute('data-status');
-      }
-    }catch(e){ console.error(e); }
-  }
-
-  try{
-    if (typeof window.setStatus === "function"){
-      var __orig = window.setStatus;
-      window.setStatus = function(text){
-        try{ __orig.apply(this, arguments); }catch(e){ console.error(e); }
-        try{ markStatus(document.getElementById('mailEditorStatus'), text); }catch(e){ console.error(e); }
-      };
-    } else {
-      window.setStatus = function(text){
-        markStatus(document.getElementById('mailEditorStatus'), text);
-      };
-    }
-  }catch(e){ console.error(e); }
-
-  try{
-    var elStatus = document.getElementById('mailEditorStatus');
-    if (elStatus){
-      markStatus(elStatus);
-      var mo = new MutationObserver(function(){ markStatus(elStatus); });
-      mo.observe(elStatus, { childList:true, characterData:true, subtree:true });
-    }
-  }catch(e){ console.error(e); }
-
-  // Intercept only compose-from-ticket, inject suggestedBaseName from #emlBase
-  (function(){
-    if (window.__fetch_intercept_compose) return;
-    window.__fetch_intercept_compose = true;
-    var _fetch = window.fetch;
-    window.fetch = function(input, init){
-      try{
-        var url = (typeof input === 'string') ? input : (input && input.url) || '';
-        if (url.indexOf('/api/mail/compose-from-ticket') !== -1){
-          var baseEl = document.getElementById('emlBase');
-          var base = (baseEl && baseEl.value || '').trim();
-          if (base && init && typeof init.body === 'string'){
-            try{
-              var data = JSON.parse(init.body);
-              data.suggestedBaseName = base;
-              init.body = JSON.stringify(data);
-              init.headers = Object.assign({}, init.headers, {'Content-Type':'application/json'});
-            }catch(e){ console.warn('compose interceptor parse fail', e); }
-          }
-        }
-      }catch(e){ console.error(e); }
-      return _fetch.apply(this, arguments);
-    };
-  })();
-
-  // Keep log at bottom visually; do not alter original functions
-  function ensureLogAtBottom(){
-    try{
-      var el = document.getElementById('log');
-      if (!el) return;
-      if (el.parentElement !== document.body || document.body.lastElementChild !== el){
-        document.body.appendChild(el);
-      }
-    }catch(e){ console.error(e); }
-  }
-
-  // gentle log wrapper to auto-scroll
-  (function(){
-    var origLog = window.log;
-    window.log = function(s){
-      if (typeof origLog === 'function') { try{ origLog(s); }catch(_e){} }
-      else {
-        var el = document.getElementById('log');
-        if (el) el.textContent += String(s) + "\n";
-        else try{ console.log(s); }catch(_){}
-      }
-      try{
-        var el = document.getElementById('log');
-        if (el) el.scrollTop = el.scrollHeight;
-      }catch(_){}
-    };
-  })();
-
-  document.addEventListener('DOMContentLoaded', function(){
-    try{
-      markStatus(document.getElementById('mailEditorStatus'));
-      ensureLogAtBottom();
-    }catch(e){ console.error(e); }
-  });
 })();
 </script>
