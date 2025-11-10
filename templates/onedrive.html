@@ -1,3 +1,26 @@
+<style>
+/* === PATCH: status + sticky log === */
+#mailEditorStatus{ display:none !important; }
+#mailEditorStatus[data-status="読み込み中"]{ display:inline !important; }
+
+/* Sticky bottom log */
+#log{
+  position: sticky;
+  bottom: 0;
+  max-height: 28vh;
+  overflow: auto;
+  background: #111;
+  color: #eee;
+  border-top: 1px solid #444;
+  padding: 8px 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+body { scroll-padding-bottom: 30vh; }
+
+</style>
 
     <script>
     // Fixed initial folder id for both save flows
@@ -128,7 +151,7 @@
 <!-- ベース名入力 -->
 <div class="row vertical">
   <div class="col">
-    <label class="small">AI作成本文（.eml）のベース名</label>
+    <label class="small">ベース名（AI作成/編集共通）</label>
     <input id="emlBase" type="text" placeholder="Report">
     <div class="muted" id="nm_eml_hint"></div>
   </div>
@@ -1204,3 +1227,154 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   })();
 })();
 </script>
+
+
+<!-- PATCH START: frontend-only overrides -->
+<script id="patch-frontend-overrides">
+(function(){
+  'use strict';
+
+  // --- ① status: show only "読み込み中" ---
+  function _applyStatusRule(el){
+    if(!el) return;
+    var txt = (el.textContent || "").trim();
+    if (txt === "読み込み中") {
+      el.dataset.status = "読み込み中";
+      el.style.display = "";
+    } else {
+      el.dataset.status = "";
+      el.textContent = ""; // hide any other text
+      el.style.display = "none";
+    }
+  }
+  function setStatusSafe(text){
+    try{
+      var el = document.getElementById('mailEditorStatus');
+      if(!el) return;
+      if (text === "読み込み中") {
+        el.textContent = text;
+        el.dataset.status = "読み込み中";
+        el.style.display = "";
+        el.setAttribute('aria-live','polite');
+      } else {
+        el.textContent = "";
+        el.dataset.status = "";
+        el.style.display = "none";
+      }
+    }catch(e){ console.error(e); }
+  }
+  // If a global setStatus exists, wrap/replace it safely
+  try {
+    if (typeof window.setStatus === "function") {
+      var _origSetStatus = window.setStatus;
+      window.setStatus = function(text){
+        try { setStatusSafe(text); } catch(e){ console.error(e); }
+      };
+    } else {
+      // expose our own if none exists
+      window.setStatus = setStatusSafe;
+    }
+  } catch(e){ console.error(e); }
+
+  // Fallback: observe direct text changes to #mailEditorStatus
+  try {
+    var elStatus = document.getElementById('mailEditorStatus');
+    if (elStatus) {
+      _applyStatusRule(elStatus);
+      var mo = new MutationObserver(function(muts){
+        _applyStatusRule(elStatus);
+      });
+      mo.observe(elStatus, { childList: true, characterData: true, subtree: true, attributes: true });
+      // initial hide on DOM ready in case other code runs earlier
+      elStatus.textContent = "";
+      elStatus.style.display = "none";
+    }
+  } catch(e){ console.error(e); }
+
+  // --- ② base name unification for edit-save flow ---
+  // Intercept fetch to /api/mail/compose-from-ticket and inject suggestedBaseName from #emlBase
+  (function(){
+    if (window.__patch_fetch_interceptor) return;
+    window.__patch_fetch_interceptor = true;
+    var _fetch = window.fetch;
+    window.fetch = function(input, init){
+      try{
+        var url = (typeof input === "string") ? input : (input && input.url) || "";
+        if (url && url.indexOf("/api/mail/compose-from-ticket") !== -1) {
+          var baseInput = document.getElementById('emlBase');
+          var baseName = "";
+          if (baseInput && typeof baseInput.value === "string") baseName = baseInput.value.trim();
+          // Adjust body JSON
+          if (init && init.body && typeof init.body === "string") {
+            try {
+              var data = JSON.parse(init.body);
+              if (baseName) data.suggestedBaseName = baseName;
+              init.body = JSON.stringify(data);
+              // ensure correct header
+              if (!init.headers) init.headers = {};
+              if (!("Content-Type" in init.headers)) init.headers["Content-Type"] = "application/json";
+            } catch(e){ console.warn("compose interceptor parse fail", e); }
+          }
+        }
+      } catch(e){ console.error(e); }
+      return _fetch.apply(this, arguments);
+    };
+  })();
+
+  // --- ③ move #log to bottom & auto-scroll ---
+  function ensureLogAtBottom(){
+    try{
+      var el = document.getElementById('log');
+      if (!el) return;
+      // move to body end to maximize sticky effectiveness
+      if (el.parentElement && el.parentElement !== document.body) {
+        document.body.appendChild(el);
+      } else {
+        // already at bottom: ensure it's the last child
+        if (document.body.lastElementChild !== el) {
+          document.body.appendChild(el);
+        }
+      }
+      // auto-scroll on append
+      var origAppend = el.appendChild;
+      el.appendChild = function(node){
+        var r = origAppend.call(el, node);
+        try { el.scrollTop = el.scrollHeight; }catch(_){}
+        return r;
+      };
+    }catch(e){ console.error(e); }
+  }
+  // robust log() wrapper to auto-scroll even if log() is string-based
+  (function(){
+    var origLog = window.log || function(s){
+      var el = document.getElementById('log');
+      if (el) {
+        el.textContent += String(s) + "\\n";
+      } else {
+        try { console.log(s); } catch(_) {}
+      }
+    };
+    window.log = function(s){
+      origLog(s);
+      try {
+        var el = document.getElementById('log');
+        if (el) el.scrollTop = el.scrollHeight;
+      } catch(_){}
+    };
+  })();
+
+  document.addEventListener('DOMContentLoaded', function(){
+    try{
+      // initial status hide
+      var elS = document.getElementById('mailEditorStatus');
+      if (elS) { elS.textContent = ""; elS.style.display = "none"; }
+      // re-home the log
+      ensureLogAtBottom();
+      // final safety: keep status rule applied
+      _applyStatusRule(elS);
+    }catch(e){ console.error(e); }
+  });
+
+})();
+</script>
+<!-- PATCH END -->
