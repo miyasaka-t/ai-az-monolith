@@ -1102,7 +1102,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       if (window.EDITED_TICKET_EML) {
         var emlBaseEl = document.getElementById('emlBase');
         var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
-        var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
+        var editedName = (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml')); // Pattern B: force UI base name
         return Promise.resolve()
           .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
           .then(function(r){
