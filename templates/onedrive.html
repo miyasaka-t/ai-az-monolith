@@ -660,7 +660,13 @@ async function doUpload(){
     }
 
     setPickedHint();
+    const elStatus = document.getElementById('mailEditorStatus');
+    if(elStatus){ elStatus.textContent = '保存完了'; }
+    if(window.onUploadSuccess){ try{ window.onUploadSuccess({ ok:true, via:'picker' }); }catch(_e){} }
   } catch(e){
+    const elStatus = document.getElementById('mailEditorStatus');
+    if(elStatus){ elStatus.textContent = '保存失敗'; }
+
     log("❌ "+ e.message);
   }
 }
