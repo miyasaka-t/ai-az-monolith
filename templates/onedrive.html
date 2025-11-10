@@ -120,6 +120,42 @@
     100% { background-position: 200px 0; }
   }
 
+
+/* === Right Sidebar Log Panel === */
+body.with-log-sidebar{padding-right: 380px;}
+.log-sidebar{
+  position: fixed;
+  top: 72px;            /* leave space for page header */
+  right: 16px;
+  width: 360px;
+  height: calc(100vh - 96px);
+  overflow: auto;
+  background:#fafafa;
+  border:1px solid #eee;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+  padding: 10px 12px;
+  z-index: 10;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.log-sidebar h3{
+  margin: 0;
+  font-size: 14px;
+  color: #444;
+}
+.log-sidebar #log{
+  flex:1 1 auto;
+  height: auto; /* override any min-height */
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>
 
 <h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
@@ -1066,7 +1102,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       if (window.EDITED_TICKET_EML) {
         var emlBaseEl = document.getElementById('emlBase');
         var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
-        var editedName = (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml')); // Pattern B: always use UI base name
+        var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
         return Promise.resolve()
           .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
           .then(function(r){
@@ -1203,4 +1239,40 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     } catch(e){ console.error(e); }
   })();
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const pre = document.querySelector('pre#log');
+    if (!pre) return;
+
+    // find the nearest heading "ログ" immediately before the pre
+    let logHeading = null;
+    const prev = pre.previousElementSibling;
+    if (prev && prev.tagName && prev.tagName.toLowerCase() === 'h3' && (prev.textContent || '').trim() === 'ログ') {
+      logHeading = prev;
+    }
+
+    // Build sidebar
+    const side = document.createElement('div');
+    side.className = 'log-sidebar';
+    const h = document.createElement('h3');
+    h.textContent = 'ログ';
+    side.appendChild(h);
+
+    // Move the <pre id="log"> into the sidebar
+    side.appendChild(pre);
+
+    // Append sidebar to body and adjust padding
+    document.body.appendChild(side);
+    document.body.classList.add('with-log-sidebar');
+
+    // Remove the inline heading placeholder if it exists
+    if (logHeading) logHeading.remove();
+
+  } catch (e) {
+    console.warn('log-sidebar init failed:', e);
+  }
+});
 </script>
