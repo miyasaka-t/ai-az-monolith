@@ -179,8 +179,7 @@ body.with-log-sidebar{padding-right: 380px;}
   <span id="pickedHint" class="pill"></span>
 </div>
 
-<h3>ログ</h3>
-<pre id="log"></pre>
+
 
 <!-- 自前フォルダピッカー -->
 <div id="picker" class="picker-backdrop" style="display:none" role="dialog" aria-modal="true">
@@ -1122,3 +1121,39 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 </script>
+
+
+<style>
+/* === Log: move to bottom, disable right sidebar layout === */
+body.with-log-sidebar { padding-right: 0 !important; }
+.log-sidebar {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  width: 100% !important;
+  height: auto !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin-top: 16px !important;
+}
+.log-sidebar h3 { display: none !important; } /* avoid duplicate headings if a wrapper exists */
+.log-sidebar #log {
+  background: #fafafa !important;
+  border: 1px solid #eee !important;
+  padding: 10px !important;
+  min-height: 120px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace !important;
+  font-size: 12.5px !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+/* Ensure bottom log spans full width */
+#log { width: 100%; }
+</style>
+
+<h3>ログ</h3>
+<pre id="log"></pre>
