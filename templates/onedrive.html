@@ -1008,9 +1008,19 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       });
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'compose failed'); }
+
+      // Restore picker-based upload flow
+      if (typeof window.openPicker === 'function') {
+        window.EDITED_TICKET_EML = j.ticket_eml;
+        window.EDITED_FILE_NAME  = j.suggestedFileName || '';
+        elStatus.textContent = '保存先を選択してください...';
+        openPicker();
+        return;
+      }
+
+      // fallback: direct upload (旧仕様)
       const composedTicket = j.ticket_eml;
       elStatus.textContent = '再組み立てOK → 保存中...';
-
       const fd = new FormData();
       fd.append('ticket', composedTicket);
       fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
