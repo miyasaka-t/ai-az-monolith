@@ -158,9 +158,7 @@ body.with-log-sidebar{padding-right: 380px;}
 }
 </style>
 
-<h1>OneDrive 保存 <span class="badge">組織モード</span></h1>
-<p class="muted">Graph API（アプリ権限）で保存。フォルダは自前ピッカー。</p>
-
+<h1>OneDrive 保存 </h1>
 <!-- ベース名入力 -->
 <div class="row vertical">
   <div class="col">
@@ -1020,13 +1018,6 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   window.__emlFinalPatch__ = "1762397407";
 
   // Visible version mark
-  try {
-    var v = document.createElement('div');
-    v.style.cssText = 'margin-top:6px;font-size:11px;color:#666;';
-    v.textContent = 'EML Final Patch: 1762397407';
-    (document.body || document.documentElement).appendChild(v);
-  } catch(_e) { }
-
   var qs = new URLSearchParams(location.search);
   var T_EML = qs.get('ticket_eml') || qs.get('ticket') || '';
 
