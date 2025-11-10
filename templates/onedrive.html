@@ -929,11 +929,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   <div style="margin-top:8px;">
     <label>本文（テキストのみ・改行対応）</label>
     <textarea id="textPane" style="width:100%;min-height:220px;padding:8px;"></textarea>
-    <details id="htmlPreviewWrap" style="margin-top:8px;">
-      <summary style="cursor:pointer;">HTMLプレビュー（自動生成・読み取り専用）</summary>
-      <div id="htmlPreview" style="border:1px solid #ccc;min-height:120px;padding:8px;overflow:auto;"></div>
-    </details>
-  </div>
+</div>
   <div style="margin-top:10px;display:flex;gap:8px;">
     <button type="button" id="btnComposeSave" style="display:none">編集内容で保存</button>
   </div>
@@ -947,9 +943,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   const elStatus = document.getElementById('mailEditorStatus');
   const elSubj   = document.getElementById('mailSubject');
   const elText   = document.getElementById('textPane');
-  const elPrev   = document.getElementById('htmlPreview');
-
-  function escHtml(s){
+function escHtml(s){
     return (s||'').replace(/[&<>"']/g, function(m){
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
     });
@@ -959,12 +953,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     const esc = escHtml(s||'');
     return esc.replace(/\r?\n/g, '<br>');
   }
-  function renderPreview(){
-    try{ elPrev.innerHTML = textToHtml(elText.value || ''); }catch(e){}
-  }
-  elText.addEventListener('input', renderPreview);
-
-  async function loadPreview(){
+async function loadPreview(){
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
@@ -987,8 +976,8 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
           .replace(/<[^>]+>/g, '');
         elText.value = h.trim();
       }
-      renderPreview();
-      elStatus.textContent = 'プレビューOK';
+      
+      elStatus.textContent = '準備完了';
     }catch(e){
       console.error(e);
       elStatus.textContent = '読み込み失敗';
