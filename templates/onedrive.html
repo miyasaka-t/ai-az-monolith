@@ -962,7 +962,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
-      setStatus('読み込み中...');
+      elStatus.textContent = '読み込み中...';
       const r = await fetch(`/api/mail/preview-from-ticket?ticket=${encodeURIComponent(T_EML)}`);
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
@@ -982,16 +982,16 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
         elText.value = h.trim();
       }
       renderPreview();
-      setStatus('');
+      elStatus.textContent = 'プレビューOK';
     }catch(e){
       console.error(e);
-      setStatus('読み込み失敗');
+      elStatus.textContent = '読み込み失敗';
     }
   }
 
   async function composeAndUpload(){
     try{
-      setStatus('再組み立て中...');
+      elStatus.textContent = '再組み立て中...';
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
@@ -1027,11 +1027,11 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       const j2 = await r2.json();
       if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-      setStatus('保存完了');
+      elStatus.textContent = '保存完了';
       if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
     }catch(e){
       console.error(e);
-      setStatus('保存失敗');
+      elStatus.textContent = '保存失敗';
       alert('保存に失敗しました: '+e.message);
     }
   }
@@ -1049,15 +1049,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   window.__emlFinalPatch__ = "textonly-3";
 
   var elStatus = document.getElementById('mailEditorStatus');
-  window.setStatus = function(t){
-  if(!elStatus) return;
-  try{
-    const s = (t||'').toString();
-    const show = s.startsWith('読み込み中');
-    const fail = s.startsWith('読み込み失敗');
-    elStatus.textContent = (show || fail) ? s : '';
-  }catch(_e){ elStatus.textContent=''; }
-}
+  function setStatus(t){ if (elStatus) elStatus.textContent = t; }
 
   // Ensure compose button works if earlier script didn't bind
   var btn = document.getElementById('btnComposeSave');
