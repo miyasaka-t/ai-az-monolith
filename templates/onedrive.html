@@ -121,6 +121,25 @@
   }
 
 
+/* === Right Sidebar Log Panel === */
+
+
+.log-sidebar h3{
+  margin: 0;
+  font-size: 14px;
+  color: #444;
+}
+.log-sidebar #log{
+  flex:1 1 auto;
+  height: auto; /* override any min-height */
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>
 
 <h1>OneDrive 保存 </h1>
@@ -141,9 +160,13 @@
 <!-- 操作 -->
 <div class="row">
   <button id="openPicker">📁 編集せずに保存</button>
-  <button id="btnComposeSaveTop" type="button">編集内容で保存</button>
+        <button id="btnComposeSaveTop" class="btn btn-primary">編集内容で保存</button>
+
   <span id="pickedHint" class="pill"></span>
 </div>
+
+
+
 <!-- 自前フォルダピッカー -->
 <div id="picker" class="picker-backdrop" style="display:none" role="dialog" aria-modal="true">
 <div id="loadingOverlay"><div class="spinner"></div><p>読み込み中...</p></div>
@@ -891,6 +914,9 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       <div id="htmlPreview" style="border:1px solid #ccc;min-height:120px;padding:8px;overflow:auto;"></div>
     </details>
   </div>
+  <div style="margin-top:10px;display:flex;gap:8px;">
+        <!-- 下の編集内容で保存ボタンは上段へ移設のため削除 -->
+</div>
 </section>
 
 <script>
@@ -996,7 +1022,6 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     }
   }
 
-  document.getElementById('btnComposeSaveTop')?.addEventListener('click', composeAndUpload);
   document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload);
   loadPreview();
 })();
@@ -1044,4 +1069,38 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     };
   })();
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const pre = document.querySelector('pre#log');
+    if (!pre) return;
+
+    // find the nearest heading "ログ" immediately before the pre
+    let logHeading = null;
+    const prev = pre.previousElementSibling;
+    if (prev && prev.tagName && prev.tagName.toLowerCase() === 'h3' && (prev.textContent || '').trim() === 'ログ') {
+      logHeading = prev;
+    }
+
+    // Build sidebar
+    const side = document.createElement('div');
+    side.className = 'log-sidebar';
+    const h = document.createElement('h3');
+    h.textContent = 'ログ';
+    side.appendChild(h);
+
+    // Move the <pre id="log"> into the sidebar
+    side.appendChild(pre);
+
+    // Append sidebar to body and adjust padding
+    document.body.appendChild(side);
+    // Remove the inline heading placeholder if it exists
+    if (logHeading) logHeading.remove();
+
+  } catch (e) {
+    console.warn('log-sidebar init failed:', e);
+  }
+});
 </script>
