@@ -913,18 +913,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
   const tabText  = document.getElementById('tabText');
   const btnSave  = document.getElementById('btnComposeSave');
 
-  
-  // Map legacy inputBaseName -> #emlBase for unified base naming
-  window.inputBaseName = document.getElementById('emlBase');
-  function setStatusOnlyLoading(t){
-    const show = (typeof t === 'string') && t.indexOf('読み込み中') >= 0;
-    if (show) {
-      if (elStatus) setStatusOnlyLoading('読み込み中.');
-    } else {
-      if (elStatus) setStatusOnlyLoading('');
-    }
-  }
-function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
+  function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; }
   function showText(){ elHtml.style.display='none';  elText.style.display='block'; }
   tabHtml?.addEventListener('click', showHTML);
   tabText?.addEventListener('click', showText);
@@ -933,23 +922,23 @@ function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; 
     if(!T_EML) return;
     try{
       elEditor.style.display = '';
-      setStatusOnlyLoading('読み込み中...');
+      elStatus.textContent = '読み込み中...';
       const r = await fetch(`/api/mail/preview-from-ticket?ticket=${encodeURIComponent(T_EML)}`);
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'preview failed'); }
       elSubj.value = j.subject || '';
       elHtml.innerHTML = (j.body_html || '').trim();
       elText.value    = (j.body_text || '').trim();
-      setStatusOnlyLoading('プレビューOK');
+      elStatus.textContent = 'プレビューOK';
     }catch(e){
       console.error(e);
-      setStatusOnlyLoading('読み込み失敗');
+      elStatus.textContent = '読み込み失敗';
     }
   }
 
   async function composeAndUpload(){
     try{
-      setStatusOnlyLoading('再組み立て中...');
+      elStatus.textContent = '再組み立て中...';
       const payload = {
         ticket: T_EML,
         subject: elSubj.value || '',
@@ -957,7 +946,7 @@ function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; 
         body_text: elText.value || '',
         keep_attachments: true,
         regenerate_date: true,
-        suggestedBaseName: (document.getElementById('emlBase')?.value || '').trim() || undefined
+        suggestedBaseName: (window.inputBaseName?.value || '').trim() || undefined
       };
       const r = await fetch('/api/mail/compose-from-ticket', {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -965,23 +954,20 @@ function showHTML(){ elHtml.style.display='block'; elText.style.display='none'; 
       const j = await r.json();
       if(!j.ok){ throw new Error(j.error||'compose failed'); }
       const composedTicket = j.ticket_eml;
-      setStatusOnlyLoading('再組み立てOK → 保存中...');
+      elStatus.textContent = '再組み立てOK → 保存中...';
 
       const fd = new FormData();
       fd.append('ticket', composedTicket);
       fd.append('folderId', window.PICKED_FOLDER_ID || 'root');
-        // Force edited EML name from #emlBase (shared with AI-created)
-  const __emlBase = (document.getElementById('emlBase')?.value || 'Report').trim();
-  const __emlName = /\.eml$/i.test(__emlBase) ? __emlBase : (__emlBase + '.eml');
-  fd.append('fileName', __emlName);
-const r2 = await fetch('/api/upload', { method:'POST', body: fd });
+      if(j.suggestedFileName){ fd.append('fileName', j.suggestedFileName); }
+      const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       const j2 = await r2.json();
       if(!j2.ok){ throw new Error(j2.error||'upload failed'); }
-      setStatusOnlyLoading('保存完了');
+      elStatus.textContent = '保存完了';
       if(window.onUploadSuccess){ window.onUploadSuccess(j2); }
     }catch(e){
       console.error(e);
-      setStatusOnlyLoading('保存失敗');
+      elStatus.textContent = '保存失敗';
       alert('保存に失敗しました: '+e.message);
     }
   }
@@ -1014,7 +1000,7 @@ const r2 = await fetch('/api/upload', { method:'POST', body: fd });
   var elText   = document.getElementById('textPane');
   var btnSave  = document.getElementById('btnComposeSave');
 
-  function setStatus(t){ if (elStatus) { elStatus.textContent = (typeof t==='string' && t.indexOf('読み込み中')>=0) ? '読み込み中.' : ''; } }
+  function setStatus(t){ if (elStatus) elStatus.textContent = t; }
 
   // Define composeAndUpload in a safe, non-async way
   window.composeAndUpload = function(){
@@ -1080,7 +1066,7 @@ const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       if (window.EDITED_TICKET_EML) {
         var emlBaseEl = document.getElementById('emlBase');
         var emlBase = emlBaseEl ? (emlBaseEl.value||'Report').trim() : 'Report';
-        var editedName = window.EDITED_FILE_NAME || (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml'));
+        var editedName = (emlBase.toLowerCase().endsWith('.eml') ? emlBase : (emlBase + '.eml')); // Pattern B: always use UI base name
         return Promise.resolve()
           .then(function(){ return uploadOne(EP_UPLOAD_ORG, window.EDITED_TICKET_EML, editedName); })
           .then(function(r){
@@ -1147,7 +1133,7 @@ const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       var qs = new URLSearchParams(location.search);
       var T_EML = qs.get('ticket_eml') || qs.get('ticket');
 
-      if (elStatus) setStatusOnlyLoading('再組み立て中...');
+      if (elStatus) elStatus.textContent = '再組み立て中...';
 
       var payload = {
         ticket: T_EML || '',
@@ -1168,7 +1154,7 @@ const r2 = await fetch('/api/upload', { method:'POST', body: fd });
         if (!j || j.ok !== true) throw new Error((j && j.error) || 'compose failed');
         window.EDITED_TICKET_EML = j.ticket_eml;
         window.EDITED_FILE_NAME  = j.suggestedFileName || '';
-        if (elStatus) setStatusOnlyLoading('編集版の保存先を選択してください...');
+        if (elStatus) elStatus.textContent = '編集版の保存先を選択してください...';
 
         try {
           var last = window.DEFAULT_START_FOLDER || _getCurrentFolderId() || 'root';
@@ -1197,7 +1183,7 @@ const r2 = await fetch('/api/upload', { method:'POST', body: fd });
       })
       .catch(function(e){
         console.error(e);
-        if (elStatus) setStatusOnlyLoading('保存失敗');
+        if (elStatus) elStatus.textContent = '保存失敗';
         alert('保存に失敗しました: ' + e.message);
       });
     } catch(e){
