@@ -175,7 +175,7 @@ body.with-log-sidebar{padding-right: 380px;}
 
 <!-- 操作 -->
 <div class="row">
-  <button id="openPicker">📁 編集せずに保存</button>
+  <button id="openPicker">📁 編集せずに保存</button> <button id="btnComposeSaveTop">✏️ 編集内容で保存</button>
   <span id="pickedHint" class="pill"></span>
 </div>
 
@@ -930,7 +930,7 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     </details>
   </div>
   <div style="margin-top:10px;display:flex;gap:8px;">
-    <button type="button" id="btnComposeSave">編集内容で保存</button>
+    <button type="button" id="btnComposeSave" style="display:none">編集内容で保存</button>
   </div>
 </section>
 
@@ -1037,7 +1037,8 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
     }
   }
 
-  document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload);
+  document.getElementById('btnComposeSave')?.addEventListener('click', composeAndUpload)
+  document.getElementById('btnComposeSaveTop')?.addEventListener('click', composeAndUpload);
   loadPreview();
 })();
 </script>
