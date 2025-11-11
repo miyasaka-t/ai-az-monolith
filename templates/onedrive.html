@@ -1,3 +1,138 @@
+<style>
+/* === Button hover & transition: injected by ChatGPT (CSS-only) === */
+:root{
+  --btn-hover-raise: -1px;
+  --btn-focus-ring: 0 0 0 3px rgba(30, 144, 255, 0.35);
+  --btn-shadow-hover: 0 3px 10px rgba(0,0,0,0.08);
+  --btn-shadow-active: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+/* 対象: 全ボタン（既存の見た目は尊重し、インタラクションのみ追加） */
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease,
+              box-shadow .18s ease, transform .18s ease;
+  will-change: transform, box-shadow;
+}
+
+/* 特に対象にしたいボタン群（存在すれば合わせて適用） */
+#openPicker,
+#btnComposeSaveTop,
+#btnHome,
+#btnSearchToggle,
+#btnBack,
+#btnUp,
+#btnNewFolder,
+#btnReload,
+#pickerCancel,
+#pickerSave,
+#btnComposeSave,
+.act > button {
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease,
+              box-shadow .18s ease, transform .18s ease;
+}
+
+/* hover（disabled 以外） */
+button:not(:disabled):hover,
+input[type="button"]:not(:disabled):hover,
+input[type="submit"]:not(:disabled):hover,
+input[type="reset"]:not(:disabled):hover,
+#openPicker:hover,
+#btnComposeSaveTop:hover,
+#btnHome:hover,
+#btnSearchToggle:hover,
+#btnBack:hover,
+#btnUp:hover,
+#btnNewFolder:hover,
+#btnReload:hover,
+#pickerCancel:hover,
+#pickerSave:hover,
+#btnComposeSave:hover,
+.act > button:hover {
+  transform: translateY(var(--btn-hover-raise));
+  box-shadow: var(--btn-shadow-hover);
+}
+
+/* active */
+button:not(:disabled):active,
+input[type="button"]:not(:disabled):active,
+input[type="submit"]:not(:disabled):active,
+input[type="reset"]:not(:disabled):active,
+#openPicker:active,
+#btnComposeSaveTop:active,
+#btnHome:active,
+#btnSearchToggle:active,
+#btnBack:active,
+#btnUp:active,
+#btnNewFolder:active,
+#btnReload:active,
+#pickerCancel:active,
+#pickerSave:active,
+#btnComposeSave:active,
+.act > button:active {
+  transform: none;
+  box-shadow: var(--btn-shadow-active);
+}
+
+/* focus-visible（キーボード操作の視認性向上） */
+button:focus-visible,
+input[type="button"]:focus-visible,
+input[type="submit"]:focus-visible,
+input[type="reset"]:focus-visible,
+#openPicker:focus-visible,
+#btnComposeSaveTop:focus-visible,
+#btnHome:focus-visible,
+#btnSearchToggle:focus-visible,
+#btnBack:focus-visible,
+#btnUp:focus-visible,
+#btnNewFolder:focus-visible,
+#btnReload:focus-visible,
+#pickerCancel:focus-visible,
+#pickerSave:focus-visible,
+#btnComposeSave:focus-visible,
+.act > button:focus-visible {
+  outline: 0;
+  box-shadow: var(--btn-focus-ring);
+}
+
+/* disabled はホバー効果を無効化（見た目の意図を崩さない）*/
+button:disabled,
+input[type="button"]:disabled,
+input[type="submit"]:disabled,
+input[type="reset"]:disabled {
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* 低モーション環境配慮 */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  #openPicker,
+  #btnComposeSaveTop,
+  #btnHome,
+  #btnSearchToggle,
+  #btnBack,
+  #btnUp,
+  #btnNewFolder,
+  #btnReload,
+  #pickerCancel,
+  #pickerSave,
+  #btnComposeSave,
+  .act > button {
+    transition: none !important;
+    transform: none !important;
+    box-shadow: none !important;
+  }
+}
+/* === end inject === */
+
+</style>
 
     <script>
     // Fixed initial folder id for both save flows
