@@ -465,6 +465,21 @@ function toggleSearchBar(show){
   }
 }
 
+// --- Reset search state when navigating between folders ---
+function resetSearch(){
+  try{
+    filterWord = "";
+    if (searchInput) searchInput.value = "";
+    if (searchBar)  searchBar.classList.remove("show");
+    // Re-render unfiltered list if we already have it
+    renderList(lastFolders || []);
+    const body = document.querySelector(".picker-body");
+    if (body) body.scrollTop = 0;
+  }catch(e){ /* no-op */ }
+}
+
+
+
 function escHtml(s){
   return (s || "").replace(/[&<>"']/g, function(m){
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
@@ -528,7 +543,7 @@ function renderBreadcrumb(){
     s.onclick = ()=>{
       if(idx < breadcrumb.length-1){
         breadcrumb = breadcrumb.slice(0, idx+1);
-        isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
+        isNavigating = true; isLoading = true; updateSaveState(); resetSearch(); loadFolder(breadcrumb[breadcrumb.length-1].id, false, "crumb");
       }
     };
     el.appendChild(s);
@@ -547,7 +562,7 @@ function openPicker(){
   $("picker").style.display="flex"; setPickedHint();
   historyStack=[]; breadcrumb=[{id:"root",name:"ルート"}];
   renderBreadcrumb(); renderCurrentPath();
-  loadFolder(FIXED_START, false, "open");
+  resetSearch(); loadFolder(FIXED_START, false, "open");
 }
 function closePicker(){ $("picker").style.display="none"; }
 
@@ -602,7 +617,7 @@ function renderList(folders){
     list.appendChild(row);
   });
 }
-function enterFolder(id,name){ breadcrumb.push({id,name}); renderBreadcrumb(); renderCurrentPath(); loadFolder(id,true,"enter"); }
+function enterFolder(id,name){ breadcrumb.push({id,name}); renderBreadcrumb(); renderCurrentPath(); resetSearch(); loadFolder(id,true,"enter"); }
 
 async function deleteFolder(id,name){
   if(!confirm(`「${name}」を削除します。よろしいですか？`)) return;
@@ -617,8 +632,8 @@ async function deleteFolder(id,name){
   }
 }
 
-$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(prev,false,"back"); };
-$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); isNavigating = true; isLoading = true; updateSaveState(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
+$("btnBack").onclick=()=>{ if(!historyStack.length) return; const prev=historyStack.pop(); isNavigating = true; isLoading = true; updateSaveState(); resetSearch(); loadFolder(prev,false,"back"); };
+$("btnUp").onclick=()=>{ if(breadcrumb.length<=1) return; breadcrumb.pop(); isNavigating = true; isLoading = true; updateSaveState(); resetSearch(); loadFolder(breadcrumb[breadcrumb.length-1].id,false,"up"); };
 $("btnReload").onclick=()=>isNavigating = true; isLoading = true; updateSaveState(); loadFolder(currentId,false,"reload");
 
 // 新規フォルダ
