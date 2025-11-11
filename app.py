@@ -34,7 +34,7 @@ GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 SMALL_MAX_BYTES    = 250 * 1024 * 1024  # 250MB
 CHUNK_SIZE         = 5   * 1024 * 1024  # 5MB per chunk
-DEFAULT_TICKET_TTL = 600                # 10 min
+DEFAULT_TICKET_TTL = 1800                # 30 min
 
 # ===============================
 # チケット & トークン
