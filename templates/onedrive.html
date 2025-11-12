@@ -957,21 +957,22 @@ async function uploadDirectTicket(endpointPeek, endpointUpload, ticketId, attach
       if (typeof historyStack !== "undefined") historyStack = [];
       if (typeof breadcrumb !== "undefined") breadcrumb = [{id:"root", name:"ルート"}];
     } catch(e){}
-    // Start loading initial folder (keep same initial ID as existing implementation if available)
+    
+    // Start loading initial folder using visibility logic for skill-sheet name
     var initialId = "root";
     try {
-      // Try to extract the initial folder ID from existing code by sniffing a known element/value if present
-      // Fallback to a commonly used ID if defined on window.INIT_FOLDER_ID
-      if (typeof INIT_FOLDER_ID !== "undefined" && INIT_FOLDER_ID) {
+      if (typeof resolveStartFolderId === "function") {
+        initialId = resolveStartFolderId();
+      } else if (typeof INIT_FOLDER_ID !== "undefined" && INIT_FOLDER_ID) {
         initialId = INIT_FOLDER_ID;
-      } else {
-        // If currentId is meaningful, prefer it; else keep root (will be replaced soon anyway)
-        if (typeof currentId !== "undefined" && currentId && currentId !== "root") initialId = currentId;
+      } else if (typeof DEFAULT_START_FOLDER !== "undefined" && DEFAULT_START_FOLDER) {
+        initialId = DEFAULT_START_FOLDER;
+      } else if (typeof currentId !== "undefined" && currentId && currentId !== "root") {
+        initialId = currentId;
       }
-    } catch(e){}
-    // If the original openPicker had a hard-coded ID, we cannot detect reliably here; instead just call our loadFolder override below.
+    } catch(e){ initialId = "root"; }
     window.loadFolder(initialId, false, "open");
-  };
+    };
 
   // Override loadFolder: show skeleton during fetch; only after success, render list then setPickedHint
   window.loadFolder = async function(id, pushHistory, from){
