@@ -1302,3 +1302,43 @@ body.with-log-sidebar { padding-right: 0 !important; }
 
 <h3>ログ</h3>
 <pre id="log"></pre>
+
+
+
+
+
+<script>
+// === Debug: log folder IDs to console ===
+(function(){
+  // フォルダを開くたびに親ID（=表示する階層）をログ
+  if (typeof window.loadFolder === "function" && !window.loadFolder.__tapped) {
+    const _loadFolder = window.loadFolder;
+    window.loadFolder = async function(id, ...rest){
+      console.log("[Picker] parentId =", id || "root");
+      return _loadFolder.call(this, id, ...rest);
+    };
+    window.loadFolder.__tapped = true;
+  }
+
+  // 画面に出ているフォルダ一覧の {name, id} をテーブルでログ
+  if (typeof window.renderList === "function" && !window.renderList.__tapped) {
+    const _renderList = window.renderList;
+    window.renderList = function(folders){
+      try {
+        console.table((folders || []).map(f => ({ name: f.name, id: f.id })));
+      } catch(_) {}
+      return _renderList.apply(this, arguments);
+    };
+    window.renderList.__tapped = true;
+  }
+
+  // 行をクリックして選択したときの pickedFolderId も出す
+  document.addEventListener("click", () => {
+    try {
+      if (typeof pickedFolderId !== "undefined" && pickedFolderId) {
+        console.log("[Picker] pickedFolderId =", pickedFolderId, "name =", pickedFolderName || "");
+      }
+    } catch(_) {}
+  });
+})();
+</script>
