@@ -729,33 +729,6 @@ async function doUpload(){
   }
 
   try {
-    // 0) まず .msg の添付抽出（非消費）→ Excel 含有チェック
-    let extractedTickets = [];
-    let hasExcelInMsg = false;
-    if (want_msg && HAS_ATTACH) {
-      try{
-        const single = SINGLE_ATTACH && !ALL_ATTACH; // 単一指定時
-        extractedTickets = await createAttachmentTicketsFromMsg(T_MSG, attachBase, KINDS, single);
-        hasExcelInMsg = extractedTickets.some(t => (t.kind||"") === "excel");
-        if (!extractedTickets.length) {
-          log("ℹ️ 添付なし（想定内）");
-        } else {
-          if (single) log("→ 単一添付モード pick=first / limit=1");
-          if (KINDS)  log("→ kinds="+KINDS);
-          log("抽出件数: "+extractedTickets.length+ (hasExcelInMsg?"（Excel含む）":""));
-        }
-      }catch(e){
-        try{
-        const m = String(e && e.message || "");
-        if (m.includes("no_allowed_attachment_found")) {
-          log("ℹ️ 添付なし（想定内）");
-        } else {
-          log("⚠️ msg-to-attachment-tickets エラー: " + m);
-        }
-      }catch(_){ log("⚠️ msg-to-attachment-tickets エラー（解析失敗）"); }
-}
-    }
-
     // 1) .eml 保存
     if (want_eml && !(typeof EML_ALREADY_UPLOADED !== 'undefined' && EML_ALREADY_UPLOADED)) {
       const t = T_EML || TICKET_SINGLE;
@@ -794,18 +767,8 @@ async function doUpload(){
       }
     }
 
-    // 4) 先に抽出しておいた添付チケットを保存
-    if (extractedTickets && extractedTickets.length){
-      for (const t of extractedTickets){
-        const nm = t.fileName || "attachment";
-        log("→ attach upload: "+ nm + (t.kind?` (${t.kind})`:''));
-        const r = await uploadOne(EP_UPLOAD_ORG, t.ticket, nm);
-        log(r.ok ? "✅ 添付保存成功: "+nm : "❌ attach "+nm+" "+JSON.stringify(r.body));
-      }
-    }
-
-    // 5) 条件付き GitHub VBS 保存：.msg の添付に Excel が含まれていた場合のみ
-    const shouldSaveVbs = (hasExcelInMsg || Boolean(T_XLSX));
+    // 5) 条件付き GitHub VBS 保存：ticket_xlsx がある場合のみ
+    const shouldSaveVbs = Boolean(T_XLSX);
     if (shouldSaveVbs) {
       try{
         log("→ 条件一致（Excel添付あり）: upload-from-url " + GITHUB_RAW_URL);
