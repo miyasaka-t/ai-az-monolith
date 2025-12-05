@@ -84,13 +84,7 @@ def _auth_headers(extra=None):
     return h
 
 def _sanitize_name(name: str) -> str:
-    # 既存のサニタイズ処理（ファイル名に使えない文字をアンダースコアに置き換え）
-    sanitized_name = re.sub(r'[\\/:*?"<>|]', "_", name or "").strip() or "NewItem"
-    
-    # 追加のサニタイズ処理（指定された文字をアンダースコアに置き換え）
-    sanitized_name = re.sub(r'[%2F\\%5C%EF%BC%8F%EF%BC%8C%E2%88%95%E2%88%96%E2%81%84]', "_", sanitized_name)
-    
-    return sanitized_name
+    return (re.sub(r'[\\/:*?"<>|]', "_", name or "").strip() or "NewItem")
 
 # ---- アップロード関連
 def graph_put_small_to_folder_org(folder_id, name, mime, data):
