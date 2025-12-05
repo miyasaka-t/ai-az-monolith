@@ -84,7 +84,17 @@ def _auth_headers(extra=None):
     return h
 
 def _sanitize_name(name: str) -> str:
-    return (re.sub(r'[\\/:*?"<>|]', "_", name or "").strip() or "NewItem")
+    # URLエンコードされた文字列を安全な代替文字に置き換え
+    name = (name or "").strip()
+    
+    # 指定されたエンコードされた文字列を置き換え
+    name = name.replace("%2F", "_").replace("%5C", "_").replace("%EF%BC%8F", "_")
+    name = name.replace("%EF%BC%8C", "_").replace("%E2%88%95", "_")
+    
+    # その他の不正な文字を置き換え
+    name = re.sub(r'[\\/:*?"<>|]', "_", name)
+    
+    return name or "NewItem"
 
 # ---- アップロード関連
 def graph_put_small_to_folder_org(folder_id, name, mime, data):
