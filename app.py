@@ -221,7 +221,15 @@ def materialize_bytes(meta):
     チケットメタから (file_name, bytes, mime) を返す
     type: "base64" / "text" / "eml" / "url"
     """
-    t = (meta.get("type") or "").lower()
+    meta_type = (meta.get("type") or "").lower()
+    meta_name = meta.get("fileName")
+    meta_mime = meta.get("mime")
+    try:
+        print(f"[materialize_bytes] type={meta_type} fileName={meta_name} mime={meta_mime}", flush=True)
+    except Exception:
+        # ログ出力で例外が出ても本処理に影響しないようにする
+        pass
+    t = meta_type
     if t == "base64":
         return meta.get("fileName") or "download.bin", base64.b64decode(meta.get("data") or ""), meta.get("mime") or "application/octet-stream"
     elif t == "text":
@@ -237,9 +245,17 @@ def materialize_bytes(meta):
         # 1) data（base64）があればそれを使う
         data_b64 = meta.get("data")
         if data_b64:
+            try:
+                print(f"[materialize_bytes] eml via=data fileName={meta.get('fileName')} mime={meta.get('mime') or 'message/rfc822'}", flush=True)
+            except Exception:
+                pass
             return meta.get("fileName") or "message.eml", base64.b64decode(data_b64), meta.get("mime") or "message/rfc822"
         # 2) payload から EML を組み立てる
         p = meta.get("payload") or {}
+        try:
+            print(f"[materialize_bytes] eml via=payload fileName={meta.get('fileName')} mime={meta.get('mime') or 'message/rfc822'}", flush=True)
+        except Exception:
+            pass
         body_text = p.get("text") or p.get("body") or ""
         body_html = p.get("html")
         if body_html in (None, False, "") and (p.get("htmlFromText") or True):
@@ -533,6 +549,15 @@ def tickets_create():
                 meta["mime"] = "message/rfc822"
         else:
             meta["data"] = j.get("data") or ""
+        # チケット作成時のログ（特に eml 用）
+        try:
+            if mtype == "eml":
+                p = meta.get("payload") or {}
+                print(f"[tickets_create] type=eml fileName={meta.get('fileName')} subject={p.get('subject')}", flush=True)
+            else:
+                print(f"[tickets_create] type={mtype} fileName={meta.get('fileName')} mime={meta.get('mime')}", flush=True)
+        except Exception:
+            pass
         ttl = int(j.get("ttlSec") or DEFAULT_TICKET_TTL)
         tid = save_ticket(meta, ttl=ttl)
         return jsonify({"ticket": tid})
@@ -927,6 +952,13 @@ def api_upload():
         file_name, data_bytes, mime = materialize_bytes(meta)
         if name_ovr:
             file_name = (name_ovr or "").strip() or file_name
+
+        try:
+            print(f"[api_upload] ticket={ticket} meta.type={meta.get('type')} meta.fileName={meta.get('fileName')} mime={mime} uploadName={file_name}", flush=True)
+            if isinstance(data_bytes, (bytes, bytearray)) and file_name.lower().endswith(".eml") and b"X-Document-Type: Workbook" in data_bytes[:500]:
+                print(f"[api_upload] warning: suspicious_eml_content ticket={ticket} name={file_name}", flush=True)
+        except Exception:
+            pass
 
         if len(data_bytes) <= SMALL_MAX_BYTES:
             r = graph_put_small_to_folder_org(folderId, file_name, mime, data_bytes)
